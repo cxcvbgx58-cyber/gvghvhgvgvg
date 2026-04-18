@@ -928,6 +928,83 @@ async function startServer() {
   // Initialize Global Server Engine
   const serverEngine = new ServerSmarteyeEngine();
 
+  // Ticker caching for the screener to reduce client load
+  let cachedTickers: any[] = [];
+  let lastTickerFetch = 0;
+  const TICKER_TTL = 15000; // 15 seconds
+
+  const fetchGlobalTickers = async () => {
+    if (Date.now() - lastTickerFetch < TICKER_TTL && cachedTickers.length > 0) return cachedTickers;
+    
+    try {
+      const results = await Promise.allSettled([
+        axios.get('https://api.binance.com/api/v3/ticker/24hr', { timeout: 10000 }),
+        axios.get('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 10000 }),
+        axios.get('https://api.bybit.com/v5/market/tickers?category=spot', { timeout: 10000 }),
+        axios.get('https://api.bybit.com/v5/market/tickers?category=linear', { timeout: 10000 }),
+      ]);
+
+      const list: any[] = [];
+
+      // Binance Spot
+      if (results[0].status === 'fulfilled') {
+        const data = results[0].value.data;
+        data.filter((t: any) => t.symbol.endsWith('USDT')).forEach((t: any) => {
+          list.push({
+            s: t.symbol, p: parseFloat(t.lastPrice), c: parseFloat(t.priceChangePercent), 
+            v: parseFloat(t.quoteVolume), m: 'SPOT', e: 'Binance'
+          });
+        });
+      }
+
+      // Binance Futures
+      if (results[1].status === 'fulfilled') {
+        const data = results[1].value.data;
+        data.filter((t: any) => t.symbol.endsWith('USDT')).forEach((t: any) => {
+          list.push({
+            s: t.symbol, p: parseFloat(t.lastPrice), c: parseFloat(t.priceChangePercent), 
+            v: parseFloat(t.quoteVolume), m: 'FUTURES', e: 'Binance'
+          });
+        });
+      }
+
+      // Bybit Spot
+      if (results[2].status === 'fulfilled') {
+        const data = results[2].value.data.result.list;
+        data.filter((t: any) => t.symbol.endsWith('USDT')).forEach((t: any) => {
+          list.push({
+            s: t.symbol, p: parseFloat(t.lastPrice), c: parseFloat(t.price24hPcnt) * 100, 
+            v: parseFloat(t.turnover24h), m: 'SPOT', e: 'Bybit'
+          });
+        });
+      }
+
+      // Bybit Linear
+      if (results[3].status === 'fulfilled') {
+        const data = results[3].value.data.result.list;
+        data.filter((t: any) => t.symbol.endsWith('USDT')).forEach((t: any) => {
+          list.push({
+            s: t.symbol, p: parseFloat(t.lastPrice), c: parseFloat(t.price24hPcnt) * 100, 
+            v: parseFloat(t.turnover24h), m: 'FUTURES', e: 'Bybit'
+          });
+        });
+      }
+
+      // Only return top 500 by volume to save memory
+      cachedTickers = list.sort((a, b) => b.v - a.v).slice(0, 500);
+      lastTickerFetch = Date.now();
+      return cachedTickers;
+    } catch (e) {
+      console.error("[Tickers] Fetch error:", e);
+      return cachedTickers;
+    }
+  };
+
+  app.get("/api/tickers", async (req, res) => {
+    const tickers = await fetchGlobalTickers();
+    res.json(tickers);
+  });
+
   // Periodically broadcast engine results to all connected clients
   setInterval(() => {
     if (wss.clients.size > 0) {

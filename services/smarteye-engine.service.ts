@@ -107,12 +107,29 @@ export class SmarteyeEngineService {
 
     this.connectToProxy();
 
-    // The pipeline logic (density scanning) is now handled server-side.
-    // We only keep the pipeline active if there's local logic we still want (but for now, we follow server data).
+    // Enable periodic cleanup of stale state even if we rely on server for density scanning
     if (!this.pipelineIntervalId) {
-      // We still run a minimal tick if we need to update some local UI state, 
-      // but for density scanning, we rely on server updates.
-      // this.pipelineIntervalId = setInterval(() => this.engineTick(), CONFIG.engineTickMs);
+      this.pipelineIntervalId = setInterval(() => this.cleanupState(), 60000);
+    }
+  }
+
+  private cleanupState() {
+    const now = Date.now();
+    const TTL = 5 * 60 * 1000; // 5 minutes TTL for inactive symbols
+    
+    // Cleanup stale SymbolState
+    for (const key in this.marketState) {
+      const state = this.marketState[key];
+      if (now - state.lastUpdate > TTL && state.symbol !== this.previewSymbol) {
+        delete this.marketState[key];
+      }
+    }
+
+    // Cleanup stale activeDensities (client-side backup)
+    for (const [id, density] of this.activeDensities) {
+      if (now - density.lastUpdate > 60000) {
+        this.activeDensities.delete(id);
+      }
     }
   }
 
