@@ -323,17 +323,38 @@ async function startServer() {
 
   // Proxy for exchange tickers to bypass regional blocks (e.g. 451)
   app.get("/api/exchanges/tickers", async (req, res) => {
+    const binanceHosts = [
+      'https://api.binance.com',
+      'https://api1.binance.com',
+      'https://api2.binance.com',
+      'https://api3.binance.com'
+    ];
+    
+    const fetchWithRetry = async (hosts: string[], path: string) => {
+      for (const host of hosts) {
+        try {
+          const response = await axios.get(`${host}${path}`, { timeout: 5000 });
+          if (response.status === 200) return response.data;
+        } catch (e: any) {
+          console.warn(`[Ticker Proxy] Failed fetch from ${host}${path}: ${e.message}`);
+        }
+      }
+      return null;
+    };
+
     try {
-      const results = await Promise.allSettled([
-        axios.get('https://api.binance.com/api/v3/ticker/24hr', { timeout: 8000 }),
-        axios.get('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 8000 }),
-        axios.get('https://api.bybit.com/v5/market/tickers?category=spot', { timeout: 8000 }),
-        axios.get('https://api.bybit.com/v5/market/tickers?category=linear', { timeout: 8000 }),
+      console.log("[Ticker Proxy] Fetching market tickers...");
+      const results = await Promise.all([
+        fetchWithRetry(binanceHosts, '/api/v3/ticker/24hr'),
+        fetchWithRetry(['https://fapi.binance.com', 'https://fapi1.binance.com'], '/fapi/v1/ticker/24hr'),
+        fetchWithRetry(['https://api.bybit.com', 'https://api.bytick.com'], '/v5/market/tickers?category=spot'),
+        fetchWithRetry(['https://api.bybit.com', 'https://api.bytick.com'], '/v5/market/tickers?category=linear'),
       ]);
 
-      const data = results.map(r => r.status === 'fulfilled' ? r.value.data : null);
-      res.json(data);
+      console.log(`[Ticker Proxy] Fetch complete. Stats: B-Spot=${!!results[0]}, B-Fut=${!!results[1]}, Y-Spot=${!!results[2]}, Y-Fut=${!!results[3]}`);
+      res.json(results);
     } catch (e) {
+      console.error("[Ticker Proxy] Fatal error:", e);
       res.status(500).json({ error: "Failed to fetch tickers from exchanges" });
     }
   });

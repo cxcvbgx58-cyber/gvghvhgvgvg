@@ -629,6 +629,11 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
 
       const resultsRaw = await fetchWithTimeout('/api/exchanges/tickers');
       
+      if (!Array.isArray(resultsRaw)) {
+        console.error("[Screener] Invalid ticker data received:", resultsRaw);
+        throw new Error("Invalid ticker data");
+      }
+
       const results = [
         { status: resultsRaw[0] ? 'fulfilled' : 'rejected', value: resultsRaw[0] },
         { status: resultsRaw[1] ? 'fulfilled' : 'rejected', value: resultsRaw[1] },
