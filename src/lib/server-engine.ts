@@ -97,7 +97,7 @@ export class ServerSmarteyeEngine {
   }
 
   private parseDepth(state: SymbolState, data: any, exchange: string, isSnapshot: boolean) {
-    const MAX_LEVELS_PER_SIDE = 500; 
+    const MAX_LEVELS_PER_SIDE = 100; // Reduced from 500 to 100 on server
     const MAX_BOOK_DIST_PCT = 0.05; 
     
     const update = (map: Map<number, number>, arr: any[], side: Side) => {
@@ -208,7 +208,7 @@ export class ServerSmarteyeEngine {
 
       (['bid', 'ask'] as Side[]).forEach(side => {
         const map = side === 'bid' ? state.bids : state.asks;
-        const topLevels = this.getTopNFromMap(map, state.currentPrice, maxDist, 20);
+        const topLevels = this.getTopNFromMap(map, state.currentPrice, maxDist, 15); // Reduced from 20 to 15
         
         if (topLevels.length > 0) {
           const candidate = topLevels[0];

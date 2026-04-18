@@ -1194,9 +1194,14 @@ async function startServer() {
             data: parsed
           });
           
+          const symbol = (parsed.s || parsed.data?.s)?.toUpperCase();
+
           subscribers?.forEach(client => {
             if (client.readyState === WebSocket.OPEN) {
-              client.send(message);
+              // Only send raw depth if the client is specifically previewing this symbol
+              if (client.previewSymbol === symbol) {
+                client.send(message);
+              }
             }
           });
         }
@@ -1331,6 +1336,11 @@ async function startServer() {
         if (payload.type === "IDENTIFY") {
           clientWs.userId = payload.userId;
           console.log(`[WS Support] Client identified as ${payload.userId}`);
+          return;
+        }
+
+        if (payload.type === "SET_PREVIEW_SYMBOL") {
+          clientWs.previewSymbol = payload.symbol?.toUpperCase();
           return;
         }
 

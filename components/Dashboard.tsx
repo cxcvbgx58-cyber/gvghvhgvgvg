@@ -542,6 +542,15 @@ const Dashboard: React.FC<{
     fetchRanks();
   }, [engine]);
 
+  // Sync previewSymbol with engine for memory optimization
+  useEffect(() => {
+    if (previewCoin) {
+      engine.setPreviewCoin(previewCoin.symbol);
+    } else {
+      engine.setPreviewCoin(null);
+    }
+  }, [previewCoin, engine]);
+
   useEffect(() => {
     const subL = engine.longs$.subscribe(setLongData);
     const subS = engine.shorts$.subscribe(setShortData);
