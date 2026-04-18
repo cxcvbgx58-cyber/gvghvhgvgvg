@@ -646,48 +646,48 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
       };
 
       let bSpot: MarketCoin[] = [];
-      if (results[0].status === 'fulfilled') {
-        bSpot = results[0].value.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
+      if (results[0].status === 'fulfilled' && Array.isArray(results[0].value)) {
+        bSpot = results[0].value.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
           const base = t.symbol.replace('USDT', '');
           return {
-            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
-            change24h: parseFloat(t.priceChangePercent), volume24h: parseFloat(t.quoteVolume),
+            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0),
+            change24h: parseFloat(t.priceChangePercent || 0), volume24h: parseFloat(t.quoteVolume || 0),
             market: 'SPOT', exchange: 'Binance', logo: `/api/logos/${base.toUpperCase()}`
           } as MarketCoin;
         }).filter(c => !isCoinExcluded(c));
       }
 
       let bFut: MarketCoin[] = [];
-      if (results[1].status === 'fulfilled') {
-        bFut = results[1].value.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
+      if (results[1].status === 'fulfilled' && Array.isArray(results[1].value)) {
+        bFut = results[1].value.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
           const base = t.symbol.replace('USDT', '');
           return {
-            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
-            change24h: parseFloat(t.priceChangePercent), volume24h: parseFloat(t.quoteVolume),
+            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0),
+            change24h: parseFloat(t.priceChangePercent || 0), volume24h: parseFloat(t.quoteVolume || 0),
             market: 'FUTURES', exchange: 'Binance', logo: `/api/logos/${base.toUpperCase()}`
           } as MarketCoin;
         }).filter(c => !isCoinExcluded(c));
       }
 
       let ySpot: MarketCoin[] = [];
-      if (results[2].status === 'fulfilled') {
-        ySpot = results[2].value.result.list.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
+      if (results[2].status === 'fulfilled' && results[2].value?.result?.list) {
+        ySpot = results[2].value.result.list.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
           const base = t.symbol.replace('USDT', '');
           return {
-            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
-            change24h: parseFloat(t.price24hPcnt) * 100, volume24h: parseFloat(t.turnover24h),
+            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0),
+            change24h: parseFloat(t.price24hPcnt || 0) * 100, volume24h: parseFloat(t.turnover24h || 0),
             market: 'SPOT', exchange: 'Bybit', logo: `/api/logos/${base.toUpperCase()}`
           } as MarketCoin;
         }).filter(c => !isCoinExcluded(c));
       }
 
       let yFut: MarketCoin[] = [];
-      if (results[3].status === 'fulfilled') {
-        yFut = results[3].value.result.list.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
+      if (results[3].status === 'fulfilled' && results[3].value?.result?.list) {
+        yFut = results[3].value.result.list.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
           const base = t.symbol.replace('USDT', '');
           return {
-            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
-            change24h: parseFloat(t.price24hPcnt) * 100, volume24h: parseFloat(t.turnover24h),
+            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0),
+            change24h: parseFloat(t.price24hPcnt || 0) * 100, volume24h: parseFloat(t.turnover24h || 0),
             market: 'FUTURES', exchange: 'Bybit', logo: `/api/logos/${base.toUpperCase()}`
           } as MarketCoin;
         }).filter(c => !isCoinExcluded(c));

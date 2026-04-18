@@ -321,42 +321,67 @@ async function startServer() {
     res.redirect(`https://ui-avatars.com/api/?name=${symbol}&background=1a1a1a&color=fff&bold=true&font-size=0.33`);
   });
 
-  // Proxy for exchange tickers to bypass regional blocks (e.g. 451)
-  app.get("/api/exchanges/tickers", async (req, res) => {
+  // Global Ticker Cache to avoid timeouts and bypass regional rate limits/blocks
+  let globalTickerCache: any[] = [null, null, null, null];
+  
+  const refreshTickerCache = async () => {
     const binanceHosts = [
       'https://api.binance.com',
       'https://api1.binance.com',
       'https://api2.binance.com',
-      'https://api3.binance.com'
+      'https://api3.binance.com',
+      'https://api.binance.us' // US fallback
     ];
     
-    const fetchWithRetry = async (hosts: string[], path: string) => {
+    const fetchWithRetry = async (hosts: string[], path: string, name: string) => {
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+      };
+      
       for (const host of hosts) {
         try {
-          const response = await axios.get(`${host}${path}`, { timeout: 5000 });
-          if (response.status === 200) return response.data;
+          const response = await axios.get(`${host}${path}`, { 
+            timeout: 4000, 
+            headers,
+            validateStatus: (status) => status === 200
+          });
+          if (response.data) {
+            console.log(`[Ticker Proxy] Success: ${name} from ${host}`);
+            return response.data;
+          }
         } catch (e: any) {
-          console.warn(`[Ticker Proxy] Failed fetch from ${host}${path}: ${e.message}`);
+          const status = e.response?.status;
+          console.warn(`[Ticker Proxy] ${name} failed at ${host} (${status || e.message})`);
+          if (status === 451) continue; // Regional block, try next
         }
       }
       return null;
     };
 
     try {
-      console.log("[Ticker Proxy] Fetching market tickers...");
       const results = await Promise.all([
-        fetchWithRetry(binanceHosts, '/api/v3/ticker/24hr'),
-        fetchWithRetry(['https://fapi.binance.com', 'https://fapi1.binance.com'], '/fapi/v1/ticker/24hr'),
-        fetchWithRetry(['https://api.bybit.com', 'https://api.bytick.com'], '/v5/market/tickers?category=spot'),
-        fetchWithRetry(['https://api.bybit.com', 'https://api.bytick.com'], '/v5/market/tickers?category=linear'),
+        fetchWithRetry(binanceHosts, '/api/v3/ticker/24hr', 'B-Spot'),
+        fetchWithRetry(['https://fapi.binance.com', 'https://fapi1.binance.com', 'https://fapi.binance.us'], '/fapi/v1/ticker/24hr', 'B-Fut'),
+        fetchWithRetry(['https://api.bybit.com', 'https://api.bytick.com', 'https://api.bybit.nl'], '/v5/market/tickers?category=spot', 'Y-Spot'),
+        fetchWithRetry(['https://api.bybit.com', 'https://api.bytick.com', 'https://api.bybit.nl'], '/v5/market/tickers?category=linear', 'Y-Fut'),
       ]);
 
-      console.log(`[Ticker Proxy] Fetch complete. Stats: B-Spot=${!!results[0]}, B-Fut=${!!results[1]}, Y-Spot=${!!results[2]}, Y-Fut=${!!results[3]}`);
-      res.json(results);
+      // Optimization: merge with previous cache if some entries are null to avoid flickering
+      globalTickerCache = results.map((res, i) => res || globalTickerCache[i]);
+      console.log(`[Ticker Proxy] Cache Updated. Stats: ${results.map((r, i) => r ? 'OK' : 'FAIL').join(', ')}`);
     } catch (e) {
-      console.error("[Ticker Proxy] Fatal error:", e);
-      res.status(500).json({ error: "Failed to fetch tickers from exchanges" });
+      console.error("[Ticker Proxy] Background fetch fatal error:", e);
     }
+  };
+
+  // Run initial fetch and set interval
+  refreshTickerCache();
+  setInterval(refreshTickerCache, 20000);
+
+  // Proxy for exchange tickers returns the cached data immediately
+  app.get("/api/exchanges/tickers", (req, res) => {
+    res.json(globalTickerCache);
   });
 
   // Database Routes
