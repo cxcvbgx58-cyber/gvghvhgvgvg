@@ -330,30 +330,47 @@ async function startServer() {
       'https://api1.binance.com',
       'https://api2.binance.com',
       'https://api3.binance.com',
-      'https://api.binance.us' // US fallback
+      'https://api4.binance.com'
+    ];
+
+    const binanceFutHosts = [
+      'https://fapi.binance.com',
+      'https://fapi1.binance.com',
+      'https://fapi2.binance.com',
+      'https://fapi3.binance.com',
+      'https://fapi4.binance.com'
+    ];
+
+    const bybitHosts = [
+      'https://api.bybit.com',
+      'https://api.bytick.com',
+      'https://api.bybit.nl',
+      'https://api.bybit.com.hk',
+      'https://api.bybitpro.com'
     ];
     
-    const fetchWithRetry = async (hosts: string[], path: string, name: string) => {
+    const fetchWithRetry = async (hosts: string[], path: string, name: string, timeout = 5000) => {
       const headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache'
       };
       
       for (const host of hosts) {
         try {
           const response = await axios.get(`${host}${path}`, { 
-            timeout: 4000, 
+            timeout, 
             headers,
             validateStatus: (status) => status === 200
           });
-          if (response.data) {
+          if (response.data && (response.data.result || Array.isArray(response.data))) {
             console.log(`[Ticker Proxy] Success: ${name} from ${host}`);
             return response.data;
           }
         } catch (e: any) {
           const status = e.response?.status;
           console.warn(`[Ticker Proxy] ${name} failed at ${host} (${status || e.message})`);
-          if (status === 451) continue; // Regional block, try next
+          if (status === 451 || status === 403) continue; 
         }
       }
       return null;
@@ -361,10 +378,10 @@ async function startServer() {
 
     try {
       const results = await Promise.all([
-        fetchWithRetry(binanceHosts, '/api/v3/ticker/24hr', 'B-Spot'),
-        fetchWithRetry(['https://fapi.binance.com', 'https://fapi1.binance.com', 'https://fapi.binance.us'], '/fapi/v1/ticker/24hr', 'B-Fut'),
-        fetchWithRetry(['https://api.bybit.com', 'https://api.bytick.com', 'https://api.bybit.nl'], '/v5/market/tickers?category=spot', 'Y-Spot'),
-        fetchWithRetry(['https://api.bybit.com', 'https://api.bytick.com', 'https://api.bybit.nl'], '/v5/market/tickers?category=linear', 'Y-Fut'),
+        fetchWithRetry(binanceHosts, '/api/v3/ticker/24hr', 'B-Spot', 5000),
+        fetchWithRetry(binanceFutHosts, '/fapi/v1/ticker/24hr', 'B-Fut', 8000),
+        fetchWithRetry(bybitHosts, '/v5/market/tickers?category=spot', 'Y-Spot', 6000),
+        fetchWithRetry(bybitHosts, '/v5/market/tickers?category=linear', 'Y-Fut', 8000),
       ]);
 
       // Optimization: merge with previous cache if some entries are null to avoid flickering
