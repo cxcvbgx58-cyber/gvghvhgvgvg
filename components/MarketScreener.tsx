@@ -205,56 +205,18 @@ const CoinLogo = React.memo(({ baseAsset, size = "w-16 h-16", padding = "p-3" }:
   );
 });
 
-// Global cache for sparkline data to avoid redundant fetches and save memory
-const sparklineCache = new Map<string, number[]>();
-const sparklineLoading = new Set<string>();
-
-const Sparkline = React.memo(({ symbol, exchange, market, isLong }: { symbol: string, exchange: string, market: string, isLong: boolean }) => {
+const Sparkline = React.memo(({ symbol, exchange, market, isLong, isActive = false }: { symbol: string, exchange: string, market: string, isLong: boolean, isActive?: boolean }) => {
   const [points, setPoints] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const cacheKey = `${exchange}-${market}-${symbol}`;
 
   useEffect(() => {
-    let isMounted = true;
+    if (!isActive) return;
     
-    // If we have cached data, use it immediately
-    if (sparklineCache.has(cacheKey)) {
-      setPoints(sparklineCache.get(cacheKey)!);
-      setLoading(false);
-      return;
-    }
-
+    let isMounted = true;
     const fetchSparkline = async () => {
-      // Avoid parallel duplicate requests
-      if (sparklineLoading.has(cacheKey)) {
-        // Poll for completion or just wait a bit if already loading
-        let attempts = 0;
-        while (sparklineLoading.has(cacheKey) && attempts < 10) {
-          await new Promise(r => setTimeout(r, 500));
-          if (sparklineCache.has(cacheKey)) {
-            if (isMounted) {
-              setPoints(sparklineCache.get(cacheKey)!);
-              setLoading(false);
-            }
-            return;
-          }
-          attempts++;
-        }
-      }
-
-      if (!isMounted) return;
-      if (sparklineCache.has(cacheKey)) {
-        setPoints(sparklineCache.get(cacheKey)!);
-        setLoading(false);
-        return;
-      }
-
-      sparklineLoading.add(cacheKey);
-
       try {
-        // More aggressive staggering to allow browser to handle previous requests
-        await new Promise(resolve => setTimeout(resolve, Math.random() * 3000));
+        // Add a small random delay to stagger requests and avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, Math.random() * 2000));
         
         if (!isMounted) return;
 
@@ -268,7 +230,6 @@ const Sparkline = React.memo(({ symbol, exchange, market, isLong }: { symbol: st
         }
 
         const res = await fetch(url);
-        if (!res.ok) throw new Error('API Error');
         const data = await res.json();
         
         if (!isMounted) return;
@@ -279,40 +240,18 @@ const Sparkline = React.memo(({ symbol, exchange, market, isLong }: { symbol: st
         } else {
           closePrices = data.result.list.map((d: any) => parseFloat(d[4])).reverse();
         }
-        
-        if (closePrices.length > 1) {
-          sparklineCache.set(cacheKey, closePrices);
-          setPoints(closePrices);
-        }
+        setPoints(closePrices);
         setLoading(false);
       } catch (e) {
         if (isMounted) setLoading(false);
-      } finally {
-        sparklineLoading.delete(cacheKey);
       }
     };
 
-    // Only fetch when the component is visible in the viewport
-    const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting) {
-        fetchSparkline();
-        observer.disconnect();
-      }
-    }, { rootMargin: '200px' }); // Load slightly before coming into view
+    fetchSparkline();
+    return () => { isMounted = false; };
+  }, [symbol, exchange, market]);
 
-    if (containerRef.current) {
-      observer.observe(containerRef.current);
-    }
-
-    return () => { 
-      isMounted = false; 
-      observer.disconnect();
-    };
-  }, [symbol, exchange, market, cacheKey]);
-
-  if (loading || points.length < 2) return (
-    <div ref={containerRef} className="w-full h-full opacity-10 bg-white/5 rounded animate-pulse" />
-  );
+  if (loading || points.length < 2) return <div className="w-full h-full opacity-10 bg-white/5 rounded animate-pulse" />;
 
   const min = Math.min(...points);
   const max = Math.max(...points);
@@ -674,20 +613,82 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
     isFetchingRef.current = true;
 
     try {
-      const resp = await fetch('/api/tickers');
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const tickers = await resp.json();
+      const fetchWithTimeout = async (url: string) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        try {
+          const res = await fetch(url, { signal: controller.signal });
+          clearTimeout(timeout);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return await res.json();
+        } catch (e) {
+          clearTimeout(timeout);
+          throw e;
+        }
+      };
 
-      const allRawData = tickers.map((t: any) => ({
-        symbol: t.s,
-        baseAsset: t.s.replace('USDT', ''),
-        price: t.p,
-        change24h: t.c,
-        volume24h: t.v,
-        market: t.m as 'SPOT' | 'FUTURES',
-        exchange: t.e as 'Binance' | 'Bybit',
-        logo: `/api/logos/${t.s.replace('USDT', '').toUpperCase()}`
-      } as MarketCoin)).filter(c => !isCoinExcluded(c));
+      const resultsRaw = await fetchWithTimeout('/api/exchanges/tickers');
+      
+      const results = [
+        { status: resultsRaw[0] ? 'fulfilled' : 'rejected', value: resultsRaw[0] },
+        { status: resultsRaw[1] ? 'fulfilled' : 'rejected', value: resultsRaw[1] },
+        { status: resultsRaw[2] ? 'fulfilled' : 'rejected', value: resultsRaw[2] },
+        { status: resultsRaw[3] ? 'fulfilled' : 'rejected', value: resultsRaw[3] },
+      ];
+
+      const getTop50 = (list: MarketCoin[]) => {
+        return list.sort((a, b) => b.volume24h - a.volume24h).slice(0, 50);
+      };
+
+      let bSpot: MarketCoin[] = [];
+      if (results[0].status === 'fulfilled') {
+        bSpot = results[0].value.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
+          const base = t.symbol.replace('USDT', '');
+          return {
+            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
+            change24h: parseFloat(t.priceChangePercent), volume24h: parseFloat(t.quoteVolume),
+            market: 'SPOT', exchange: 'Binance', logo: `/api/logos/${base.toUpperCase()}`
+          } as MarketCoin;
+        }).filter(c => !isCoinExcluded(c));
+      }
+
+      let bFut: MarketCoin[] = [];
+      if (results[1].status === 'fulfilled') {
+        bFut = results[1].value.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
+          const base = t.symbol.replace('USDT', '');
+          return {
+            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
+            change24h: parseFloat(t.priceChangePercent), volume24h: parseFloat(t.quoteVolume),
+            market: 'FUTURES', exchange: 'Binance', logo: `/api/logos/${base.toUpperCase()}`
+          } as MarketCoin;
+        }).filter(c => !isCoinExcluded(c));
+      }
+
+      let ySpot: MarketCoin[] = [];
+      if (results[2].status === 'fulfilled') {
+        ySpot = results[2].value.result.list.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
+          const base = t.symbol.replace('USDT', '');
+          return {
+            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
+            change24h: parseFloat(t.price24hPcnt) * 100, volume24h: parseFloat(t.turnover24h),
+            market: 'SPOT', exchange: 'Bybit', logo: `/api/logos/${base.toUpperCase()}`
+          } as MarketCoin;
+        }).filter(c => !isCoinExcluded(c));
+      }
+
+      let yFut: MarketCoin[] = [];
+      if (results[3].status === 'fulfilled') {
+        yFut = results[3].value.result.list.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
+          const base = t.symbol.replace('USDT', '');
+          return {
+            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
+            change24h: parseFloat(t.price24hPcnt) * 100, volume24h: parseFloat(t.turnover24h),
+            market: 'FUTURES', exchange: 'Bybit', logo: `/api/logos/${base.toUpperCase()}`
+          } as MarketCoin;
+        }).filter(c => !isCoinExcluded(c));
+      }
+
+      const allRawData = [...bSpot, ...bFut, ...ySpot, ...yFut].sort((a, b) => b.volume24h - a.volume24h);
       
       const { 
         previewCoin: latestPreviewCoin, 
@@ -1596,7 +1597,7 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                             </div>
                             
                             <div className="flex-1 h-14 relative group-hover:opacity-100 opacity-60 transition-opacity">
-                              <Sparkline symbol={coin.symbol} exchange={coin.exchange} market={coin.market} isLong={isPositive} />
+                              <Sparkline symbol={coin.symbol} exchange={coin.exchange} market={coin.market} isLong={isPositive} isActive={isActive} />
                               <div className="absolute bottom-0 right-0">
                                 <span className="text-[9px] font-black text-zinc-600 uppercase tracking-widest bg-black/40 px-1 rounded">24H</span>
                               </div>
@@ -1726,7 +1727,7 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                       {/* 6. TREND */}
                       <div className="relative hidden lg:flex z-10 items-center justify-center px-2 py-4">
                          <div className="w-full max-w-[192px] h-8">
-                           <Sparkline symbol={coin.symbol} exchange={coin.exchange} market={coin.market} isLong={coin.change24h >= 0} />
+                           <Sparkline symbol={coin.symbol} exchange={coin.exchange} market={coin.market} isLong={coin.change24h >= 0} isActive={isActive} />
                          </div>
                          <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-6 bg-purple-500/20" />
                       </div>
