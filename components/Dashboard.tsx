@@ -542,15 +542,6 @@ const Dashboard: React.FC<{
     fetchRanks();
   }, [engine]);
 
-  // Sync previewSymbol with engine for memory optimization
-  useEffect(() => {
-    if (previewCoin) {
-      engine.setPreviewCoin(previewCoin.symbol);
-    } else {
-      engine.setPreviewCoin(null);
-    }
-  }, [previewCoin, engine]);
-
   useEffect(() => {
     const subL = engine.longs$.subscribe(setLongData);
     const subS = engine.shorts$.subscribe(setShortData);
@@ -870,7 +861,20 @@ const Dashboard: React.FC<{
                     if (typeof action === 'function') {
                       setPreviewCoin(action);
                     } else if (action) {
-                      setPreviewCoin(action);
+                      // Allow setting the coin if:
+                      // 1. We are in the initial setup phase
+                      // 2. It's the same coin (symbol, exchange, and market match)
+                      // 3. There is no coin selected yet (initial load)
+                      const isSameCoin = previewCoin && 
+                        action.symbol === previewCoin.symbol && 
+                        action.exchange === previewCoin.exchange && 
+                        action.market === previewCoin.market;
+                      
+                      const isInitialLoad = !previewCoin;
+                      
+                      if (isInitializing.current || isSameCoin || isInitialLoad || checkAuth()) {
+                        setPreviewCoin(action);
+                      }
                     }
                   }}
                   timeframe={timeframe}

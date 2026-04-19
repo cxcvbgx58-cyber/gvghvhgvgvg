@@ -11,7 +11,6 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Language, translations } from '../src/translations';
 import { BINANCE_ICON, BYBIT_ICON } from '../src/constants';
-import { SYMBOLS } from '../models/index';
 import { SmarteyeEngineService } from '../services/smarteye-engine.service';
 import { simulatorService } from '../services/trading-simulator.service';
 
@@ -206,13 +205,11 @@ const CoinLogo = React.memo(({ baseAsset, size = "w-16 h-16", padding = "p-3" }:
   );
 });
 
-const Sparkline = React.memo(({ symbol, exchange, market, isLong, isActive = false }: { symbol: string, exchange: string, market: string, isLong: boolean, isActive?: boolean }) => {
+const Sparkline = React.memo(({ symbol, exchange, market, isLong }: { symbol: string, exchange: string, market: string, isLong: boolean }) => {
   const [points, setPoints] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!isActive) return;
-    
     let isMounted = true;
     const fetchSparkline = async () => {
       try {
@@ -628,67 +625,60 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
         }
       };
 
-      const resultsRaw = await fetchWithTimeout('/api/exchanges/tickers');
-      
-      if (!Array.isArray(resultsRaw)) {
-        console.error("[Screener] Invalid ticker data received:", resultsRaw);
-        throw new Error("Invalid ticker data");
-      }
-
-      const results = [
-        { status: resultsRaw[0] ? 'fulfilled' : 'rejected', value: resultsRaw[0] },
-        { status: resultsRaw[1] ? 'fulfilled' : 'rejected', value: resultsRaw[1] },
-        { status: resultsRaw[2] ? 'fulfilled' : 'rejected', value: resultsRaw[2] },
-        { status: resultsRaw[3] ? 'fulfilled' : 'rejected', value: resultsRaw[3] },
-      ];
+      const results = await Promise.allSettled([
+        fetchWithTimeout('https://api.binance.com/api/v3/ticker/24hr'), 
+        fetchWithTimeout('https://fapi.binance.com/fapi/v1/ticker/24hr'), 
+        fetchWithTimeout('https://api.bybit.com/v5/market/tickers?category=spot'), 
+        fetchWithTimeout('https://api.bybit.com/v5/market/tickers?category=linear'), 
+      ]);
 
       const getTop50 = (list: MarketCoin[]) => {
         return list.sort((a, b) => b.volume24h - a.volume24h).slice(0, 50);
       };
 
       let bSpot: MarketCoin[] = [];
-      if (results[0].status === 'fulfilled' && Array.isArray(results[0].value)) {
-        bSpot = results[0].value.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
+      if (results[0].status === 'fulfilled') {
+        bSpot = results[0].value.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
           const base = t.symbol.replace('USDT', '');
           return {
-            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0),
-            change24h: parseFloat(t.priceChangePercent || 0), volume24h: parseFloat(t.quoteVolume || 0),
+            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
+            change24h: parseFloat(t.priceChangePercent), volume24h: parseFloat(t.quoteVolume),
             market: 'SPOT', exchange: 'Binance', logo: `/api/logos/${base.toUpperCase()}`
           } as MarketCoin;
         }).filter(c => !isCoinExcluded(c));
       }
 
       let bFut: MarketCoin[] = [];
-      if (results[1].status === 'fulfilled' && Array.isArray(results[1].value)) {
-        bFut = results[1].value.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
+      if (results[1].status === 'fulfilled') {
+        bFut = results[1].value.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
           const base = t.symbol.replace('USDT', '');
           return {
-            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0),
-            change24h: parseFloat(t.priceChangePercent || 0), volume24h: parseFloat(t.quoteVolume || 0),
+            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
+            change24h: parseFloat(t.priceChangePercent), volume24h: parseFloat(t.quoteVolume),
             market: 'FUTURES', exchange: 'Binance', logo: `/api/logos/${base.toUpperCase()}`
           } as MarketCoin;
         }).filter(c => !isCoinExcluded(c));
       }
 
       let ySpot: MarketCoin[] = [];
-      if (results[2].status === 'fulfilled' && results[2].value?.result?.list) {
-        ySpot = results[2].value.result.list.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
+      if (results[2].status === 'fulfilled') {
+        ySpot = results[2].value.result.list.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
           const base = t.symbol.replace('USDT', '');
           return {
-            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0),
-            change24h: parseFloat(t.price24hPcnt || 0) * 100, volume24h: parseFloat(t.turnover24h || 0),
+            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
+            change24h: parseFloat(t.price24hPcnt) * 100, volume24h: parseFloat(t.turnover24h),
             market: 'SPOT', exchange: 'Bybit', logo: `/api/logos/${base.toUpperCase()}`
           } as MarketCoin;
         }).filter(c => !isCoinExcluded(c));
       }
 
       let yFut: MarketCoin[] = [];
-      if (results[3].status === 'fulfilled' && results[3].value?.result?.list) {
-        yFut = results[3].value.result.list.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
+      if (results[3].status === 'fulfilled') {
+        yFut = results[3].value.result.list.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
           const base = t.symbol.replace('USDT', '');
           return {
-            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0),
-            change24h: parseFloat(t.price24hPcnt || 0) * 100, volume24h: parseFloat(t.turnover24h || 0),
+            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
+            change24h: parseFloat(t.price24hPcnt) * 100, volume24h: parseFloat(t.turnover24h),
             market: 'FUTURES', exchange: 'Bybit', logo: `/api/logos/${base.toUpperCase()}`
           } as MarketCoin;
         }).filter(c => !isCoinExcluded(c));
@@ -705,60 +695,18 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
 
       if (allRawData.length > 0) {
         setData(allRawData);
-      } else {
-        // FULL ROBUST FALLBACK: Generate 250+ most popular coins across ALL exchanges & markets
-        // This ensures the professional UI is always populated on Render.
-        const topSymbols = [
-          'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'SHIB', 'DOT', 'LINK', 'NEAR', 'SUI', 'AVAX',
-          ...SYMBOLS.map(s => s.replace('USDT', ''))
-        ];
         
-        const fallbackData: MarketCoin[] = [];
-        const exchanges: ('Binance' | 'Bybit')[] = ['Binance', 'Bybit'];
-        const markets: ('SPOT' | 'FUTURES')[] = ['SPOT', 'FUTURES'];
-        
-        topSymbols.forEach((base, idx) => {
-          exchanges.forEach(ex => {
-            markets.forEach(m => {
-              fallbackData.push({
-                symbol: `${base}USDT`,
-                baseAsset: base,
-                price: 0, // Will show as --- in UI if 0
-                change24h: 0,
-                volume24h: 300000000 - (idx * 1000000), // Fake volume for deterministic sorting
-                market: m,
-                exchange: ex,
-                logo: `/api/logos/${base.toUpperCase()}`
-              });
-            });
-          });
-        });
-
-        setData(fallbackData.sort((a, b) => b.volume24h - a.volume24h));
-        console.warn("[Screener] API blocked. Using deterministic 300+ coin fallback.");
-      }
-      
-      if (allRawData.length > 0 || data.length === 0) {
         // Sync ref with latest prop if needed
         if (!currentPreviewRef.current && latestPreviewCoin) {
           currentPreviewRef.current = latestPreviewCoin;
         }
 
         if (!currentPreviewRef.current && latestSettingsLoaded) {
-            const currentData = allRawData.length > 0 ? allRawData : (data.length > 0 ? data : []);
-            if (currentData.length > 0) {
-              const filtered = currentData.filter(c => {
-                const exKey = c.exchange;
-                const combinedKey = `${c.exchange} ${c.market.charAt(0) + c.market.slice(1).toLowerCase()}`;
-                const exActive = latestExchanges[exKey] || latestExchanges[combinedKey] || Object.values(latestExchanges).length === 0;
-                const typeActive = latestTypes[c.market] || Object.values(latestTypes).length === 0;
-                return exActive && typeActive;
-              });
-              const defaultCoin = filtered[0] || currentData[0] || null;
-              setPreviewCoin(defaultCoin);
-              currentPreviewRef.current = defaultCoin;
-            }
-        } else if (currentPreviewRef.current && allRawData.length > 0) {
+            const filtered = allRawData.filter(c => latestExchanges[c.exchange] && latestTypes[c.market]);
+            const defaultCoin = filtered[0] || allRawData[0] || null;
+            setPreviewCoin(defaultCoin);
+            currentPreviewRef.current = defaultCoin;
+        } else if (currentPreviewRef.current) {
           const updated = allRawData.find(c => 
             c.symbol === currentPreviewRef.current?.symbol && 
             c.market === currentPreviewRef.current?.market && 
@@ -840,19 +788,8 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
   const filteredAndSortedData = useMemo(() => {
     let result = data.filter(coin => {
       const matchesSearch = coin.symbol.toLowerCase().includes(search.toLowerCase());
-      
-      // Robust filter matching for activeTypes (handle SPOT/FUTURES)
-      const marketType = coin.market; // SPOT or FUTURES
-      const matchesMarket = activeTypes[marketType] || activeTypes[marketType.toLowerCase()] || 
-                            activeTypes[marketType.charAt(0) + marketType.slice(1).toLowerCase()] ||
-                            Object.values(activeTypes).every(v => !v); // Default true if nothing selected
-      
-      // Robust filter matching for activeExchanges (handle Binance/Binance Spot/Bybit...)
-      const exName = coin.exchange;
-      const combinedName = `${exName} ${marketType.charAt(0) + marketType.slice(1).toLowerCase()}`;
-      const matchesExchange = activeExchanges[exName] || activeExchanges[combinedName] || 
-                              Object.values(activeExchanges).every(v => !v); // Default true if nothing selected
-      
+      const matchesMarket = activeTypes[coin.market];
+      const matchesExchange = activeExchanges[coin.exchange];
       return matchesSearch && matchesMarket && matchesExchange;
     });
 
@@ -1561,16 +1498,6 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                 <Search size={48} className="mb-4" />
                 <span className="text-xl font-black uppercase tracking-widest">{t.nothing_found}</span>
                 <span className="text-xs mt-2">{t.try_changing_filters}</span>
-                <button 
-                  onClick={() => {
-                    setActiveExchanges({'Binance': true, 'Bybit': true});
-                    setActiveTypes({'SPOT': true, 'FUTURES': true});
-                    setSearch('');
-                  }}
-                  className="mt-6 px-6 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-full text-[10px] font-black uppercase tracking-[0.2em] transition-all"
-                >
-                  {language === 'ru' ? 'СБРОСИТЬ ФИЛЬТРЫ' : 'RESET FILTERS'}
-                </button>
               </div>
             ) : viewMode === 'grid' ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4 pb-24">
@@ -1666,7 +1593,7 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                             </div>
                             
                             <div className="flex-1 h-14 relative group-hover:opacity-100 opacity-60 transition-opacity">
-                              <Sparkline symbol={coin.symbol} exchange={coin.exchange} market={coin.market} isLong={isPositive} isActive={isActive} />
+                              <Sparkline symbol={coin.symbol} exchange={coin.exchange} market={coin.market} isLong={isPositive} />
                               <div className="absolute bottom-0 right-0">
                                 <span className="text-[9px] font-black text-zinc-600 uppercase tracking-widest bg-black/40 px-1 rounded">24H</span>
                               </div>
@@ -1747,18 +1674,14 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                       {/* 3. PRICE */}
                       <div className={`relative z-10 flex items-center justify-center px-0.5 py-2 sm:py-1`}>
                         <div className="flex items-center gap-1">
-                                <span className={`text-[12px] sm:text-[13px] font-black font-mono leading-none ${isActive ? 'text-white' : 'text-white/95'}`}>
-                                  <span className="hidden lg:inline">
-                                    {coin.price > 0 ? (
-                                      `$${coin.price < 0.0001 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 }) : coin.price < 1 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 }) : coin.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                                    ) : '---'}
-                                  </span>
-                                  <span className="lg:hidden inline">
-                                    {coin.price > 0 ? (
-                                      `$${coin.price < 0.0001 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 }) : coin.price < 1 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 }) : coin.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                                    ) : '---'}
-                                  </span>
-                                </span>
+                          <span className={`text-[12px] sm:text-[13px] font-black font-mono leading-none ${isActive ? 'text-white' : 'text-white/95'}`}>
+                            <span className="hidden lg:inline">
+                              ${coin.price < 0.0001 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 }) : coin.price < 1 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 }) : coin.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                            <span className="lg:hidden inline">
+                              ${coin.price < 0.0001 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 }) : coin.price < 1 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 }) : coin.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </span>
                         </div>
                         
                         <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-5 sm:h-3 bg-purple-500/20" />
@@ -1767,10 +1690,10 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                       {/* 5. PERCENTAGES */}
                       <div className={`relative z-10 flex items-center justify-center px-1 sm:px-1.5 py-2 sm:py-1`}>
                         <div className={`px-1 sm:px-1.5 h-6 sm:h-5 flex items-center justify-center shrink-0 transition-all duration-300 gap-1 ${
-                          coin.change24h > 0 ? 'text-[#00ff88]' : coin.change24h < 0 ? 'text-[#ff3355]' : 'text-zinc-500'
+                          coin.change24h >= 0 ? 'text-[#00ff88]' : 'text-[#ff3355]'
                         }`}>
                           <span className="text-[10px] sm:text-[12px] font-black font-mono leading-none">
-                            {coin.change24h > 0 ? '+' : ''}{coin.change24h !== 0 ? coin.change24h.toFixed(2) + '%' : '---'}
+                            {coin.change24h >= 0 ? '+' : ''}{coin.change24h.toFixed(2)}%
                           </span>
                         </div>
                         <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-5 sm:h-3 bg-purple-500/20" />
@@ -1800,7 +1723,7 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                       {/* 6. TREND */}
                       <div className="relative hidden lg:flex z-10 items-center justify-center px-2 py-4">
                          <div className="w-full max-w-[192px] h-8">
-                           <Sparkline symbol={coin.symbol} exchange={coin.exchange} market={coin.market} isLong={coin.change24h >= 0} isActive={isActive} />
+                           <Sparkline symbol={coin.symbol} exchange={coin.exchange} market={coin.market} isLong={coin.change24h >= 0} />
                          </div>
                          <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-6 bg-purple-500/20" />
                       </div>

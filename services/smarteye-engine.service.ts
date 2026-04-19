@@ -46,23 +46,10 @@ export class SmarteyeEngineService {
   private lastMsgTime: number = Date.now();
   private activeConfigs: ExchangeConfig[] = [];
   private tickerConfigs: { symbol: string, exchange: string, marketType: MarketType }[] = [];
-  private previewSymbol: string | null = null;
   private tickCounter = 0;
   private lastDeepCleanup = Date.now();
-  private reconnectTimeout: any = null;
-  private isConnecting = false;
 
   public ticker$ = new Subject<{ symbol: string, price: number, exchange: string, marketType: MarketType }>();
-
-  public setPreviewCoin(symbol: string | null) {
-    this.previewSymbol = symbol?.toUpperCase() || null;
-    if (this.proxySocket?.readyState === WebSocket.OPEN) {
-      this.proxySocket.send(JSON.stringify({
-        type: "SET_PREVIEW_SYMBOL",
-        symbol: this.previewSymbol
-      }));
-    }
-  }
 
   public setRankMap(map: Record<string, number>) {
     this.rankMap = map;
@@ -83,13 +70,8 @@ export class SmarteyeEngineService {
 
   public connectExchanges(configs: ExchangeConfig[]) {
     this.activeConfigs = configs;
-    
-    // Use isConnecting flag to avoid multiple overlapping attempts 
-    // especially during React re-renders or rapid setting changes
-    if (this.isConnecting) return;
-    
     this.disconnectAll();
-    
+
     const activeExchangeNames = new Set(configs.map(c => this.getNormalizedExchangeName(c.exchange, c.marketType)));
     
     Object.keys(this.marketState).forEach(key => {
@@ -118,24 +100,13 @@ export class SmarteyeEngineService {
 
   private connectToProxy() {
     this.stopWatchdog();
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-
     if (this.proxySocket) {
-      const oldWs = this.proxySocket;
-      oldWs.onopen = null;
-      oldWs.onclose = null;
-      oldWs.onerror = null;
-      oldWs.onmessage = null;
-      if (oldWs.readyState === WebSocket.CONNECTING || oldWs.readyState === WebSocket.OPEN) {
-        try { oldWs.close(); } catch(e) {}
-      }
-      this.proxySocket = null;
+      this.proxySocket.onopen = null;
+      this.proxySocket.onclose = null;
+      this.proxySocket.onerror = null;
+      this.proxySocket.onmessage = null;
+      this.proxySocket.close();
     }
-
-    this.isConnecting = true;
 
     // Use configurable proxy URL if provided, otherwise fallback to current host
     const proxyUrl = (import.meta as any).env?.VITE_WS_PROXY_URL;
@@ -155,49 +126,37 @@ export class SmarteyeEngineService {
 
       ws.onopen = () => {
         console.log("[Engine] Connected to Backend Proxy");
-        this.isConnecting = false;
         this.socketCount$.next(1);
         ws.send(JSON.stringify({
           type: "CONNECT_EXCHANGES",
           configs: this.activeConfigs,
           tickers: this.tickerConfigs
         }));
-        if (this.previewSymbol) {
-          ws.send(JSON.stringify({
-            type: "SET_PREVIEW_SYMBOL",
-            symbol: this.previewSymbol
-          }));
-        }
       };
 
-      const handleFailure = (reason: string) => {
-        this.isConnecting = false;
-        if (this.proxySocket === ws) {
-          this.proxySocket = null;
-        }
-        console.warn(`[Engine] Proxy connection failed (${reason}). Retrying in 3s...`);
-        this.socketCount$.next(0);
-        if (!this.reconnectTimeout) {
-          this.reconnectTimeout = setTimeout(() => this.connectToProxy(), 3000);
-        }
+      ws.onclose = () => {
+        console.warn("[Engine] Proxy connection closed. Reloading page...");
+        window.location.reload();
       };
 
-      ws.onclose = () => handleFailure("closed");
-      ws.onerror = () => handleFailure("error");
+      ws.onerror = (err) => {
+        console.error("[Engine] Proxy connection error:", err);
+        window.location.reload();
+      };
 
-      // Watchdog: If no message (market data or heartbeat) for 10s, reconnect
+      // Watchdog: If no message (market data or heartbeat) for 6s, reload
       this.lastMsgTime = Date.now();
       this.watchdogInterval = setInterval(() => {
         const timeSinceLastMsg = Date.now() - this.lastMsgTime;
-        if (timeSinceLastMsg > 10000) {
-          console.warn(`[Engine] Connection stall detected (${timeSinceLastMsg}ms). Reconnecting...`);
-          this.connectToProxy();
+        if (timeSinceLastMsg > 6000) {
+          console.warn(`[Engine] Connection stall detected (${timeSinceLastMsg}ms). Force reloading...`);
+          window.location.reload();
         }
-      }, 3000);
+      }, 2000);
 
       this.offlineHandler = () => {
-        console.warn("[Engine] Network offline.");
-        this.socketCount$.next(0);
+        console.warn("[Engine] Network offline. Force reloading...");
+        window.location.reload();
       };
       window.addEventListener('offline', this.offlineHandler);
 
@@ -214,7 +173,8 @@ export class SmarteyeEngineService {
 
           if (payload.type === "EXCHANGE_ERROR") {
             if (payload.isDisconnected && !payload.isRegionalBlock) {
-              console.warn("[Engine] Exchange disconnected from server proxy.");
+              console.warn("[Engine] Exchange disconnected. Force reloading...");
+              window.location.reload();
               return;
             }
             this.error$.next({
@@ -323,19 +283,13 @@ export class SmarteyeEngineService {
 
   public disconnectAll() {
     this.stopWatchdog();
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-    this.isConnecting = false;
     this.tickerConfigs = [];
     if (this.proxySocket) {
-      const oldWs = this.proxySocket;
-      oldWs.onopen = null;
-      oldWs.onclose = null;
-      oldWs.onerror = null;
-      oldWs.onmessage = null;
-      try { oldWs.close(); } catch(e) {}
+      this.proxySocket.onopen = null;
+      this.proxySocket.onclose = null;
+      this.proxySocket.onerror = null;
+      this.proxySocket.onmessage = null;
+      this.proxySocket.close();
       this.proxySocket = null;
     }
     
