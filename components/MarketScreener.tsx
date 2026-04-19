@@ -711,7 +711,14 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
         }
 
         if (!currentPreviewRef.current && latestSettingsLoaded) {
-            const filtered = allRawData.filter(c => latestExchanges[c.exchange] && latestTypes[c.market]);
+            const filtered = allRawData.filter(c => {
+              // Handle both "Binance" and "Binance Spot" style keys from Dashboard
+              const exKey = c.exchange;
+              const combinedKey = `${c.exchange} ${c.market.charAt(0) + c.market.slice(1).toLowerCase()}`;
+              const exActive = latestExchanges[exKey] || latestExchanges[combinedKey] || Object.values(latestExchanges).length === 0;
+              const typeActive = latestTypes[c.market] || Object.values(latestTypes).length === 0;
+              return exActive && typeActive;
+            });
             const defaultCoin = filtered[0] || allRawData[0] || null;
             setPreviewCoin(defaultCoin);
             currentPreviewRef.current = defaultCoin;
@@ -797,8 +804,19 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
   const filteredAndSortedData = useMemo(() => {
     let result = data.filter(coin => {
       const matchesSearch = coin.symbol.toLowerCase().includes(search.toLowerCase());
-      const matchesMarket = activeTypes[coin.market];
-      const matchesExchange = activeExchanges[coin.exchange];
+      
+      // Robust filter matching for activeTypes (handle SPOT/FUTURES)
+      const marketType = coin.market; // SPOT or FUTURES
+      const matchesMarket = activeTypes[marketType] || activeTypes[marketType.toLowerCase()] || 
+                            activeTypes[marketType.charAt(0) + marketType.slice(1).toLowerCase()] ||
+                            Object.values(activeTypes).every(v => !v); // Default true if nothing selected
+      
+      // Robust filter matching for activeExchanges (handle Binance/Binance Spot/Bybit...)
+      const exName = coin.exchange;
+      const combinedName = `${exName} ${marketType.charAt(0) + marketType.slice(1).toLowerCase()}`;
+      const matchesExchange = activeExchanges[exName] || activeExchanges[combinedName] || 
+                              Object.values(activeExchanges).every(v => !v); // Default true if nothing selected
+      
       return matchesSearch && matchesMarket && matchesExchange;
     });
 
@@ -1507,6 +1525,16 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                 <Search size={48} className="mb-4" />
                 <span className="text-xl font-black uppercase tracking-widest">{t.nothing_found}</span>
                 <span className="text-xs mt-2">{t.try_changing_filters}</span>
+                <button 
+                  onClick={() => {
+                    setActiveExchanges({'Binance': true, 'Bybit': true});
+                    setActiveTypes({'SPOT': true, 'FUTURES': true});
+                    setSearch('');
+                  }}
+                  className="mt-6 px-6 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-full text-[10px] font-black uppercase tracking-[0.2em] transition-all"
+                >
+                  {language === 'ru' ? 'СБРОСИТЬ ФИЛЬТРЫ' : 'RESET FILTERS'}
+                </button>
               </div>
             ) : viewMode === 'grid' ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4 pb-24">

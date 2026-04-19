@@ -357,23 +357,27 @@ async function startServer() {
       const headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'application/json',
-        'Cache-Control': 'no-cache'
+        'Cache-Control': 'no-cache',
+        'X-Requested-With': 'XMLHttpRequest'
       };
       
       for (const host of hosts) {
         try {
+          const startTime = Date.now();
           const response = await axios.get(`${host}${path}`, { 
-            timeout: 5000, 
+            timeout: 7000, 
             headers,
-            validateStatus: (status) => status === 200
+            validateStatus: (status) => status === 200 || status === 201
           });
           if (response.data) {
+            console.log(`[Ticker Proxy] ${name} SUCCESS from ${host} in ${Date.now() - startTime}ms`);
             return response.data;
           }
         } catch (e: any) {
           const status = e.response?.status;
+          console.warn(`[Ticker Proxy] ${name} FAILED at ${host} (Status: ${status || 'TIMEOUT'}). Region: ${serverRegion}`);
           if (status === 451 || status === 403) {
-            console.warn(`[Ticker Proxy] ${name} BLOCKED at ${host} (Status: ${status}). Server Region: ${serverRegion}`);
+            continue;
           }
           continue; 
         }
@@ -394,19 +398,28 @@ async function startServer() {
       
       const stats = results.map((r, i) => r ? 'OK' : 'FAIL').join(', ');
       if (stats.includes('FAIL')) {
-        console.log(`[Ticker Proxy] Region: ${serverRegion} | Results: ${stats}`);
+        console.warn(`[Ticker Proxy] Region: ${serverRegion} | Results: ${stats}`);
       }
     } catch (e) {
       console.error("[Ticker Proxy] Background fetch fatal error:", e);
     }
   };
 
-  // Run initial fetch and set interval
+  // Run initial fetch and set robust interval loop
   refreshTickerCache();
-  setInterval(refreshTickerCache, 20000);
+  const startTickerLoop = () => {
+    setTimeout(async () => {
+      await refreshTickerCache();
+      startTickerLoop();
+    }, 30000);
+  };
+  startTickerLoop();
 
   // Proxy for exchange tickers returns the cached data immediately
   app.get("/api/exchanges/tickers", (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.json(globalTickerCache);
   });
 
