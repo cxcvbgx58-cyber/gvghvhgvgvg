@@ -11,6 +11,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Language, translations } from '../src/translations';
 import { BINANCE_ICON, BYBIT_ICON } from '../src/constants';
+import { SYMBOLS } from '../models/index';
 import { SmarteyeEngineService } from '../services/smarteye-engine.service';
 import { simulatorService } from '../services/trading-simulator.service';
 
@@ -704,25 +705,44 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
 
       if (allRawData.length > 0) {
         setData(allRawData);
-        
+      } else {
+        // FALLBACK: If API is blocked, generate a static list from predefined SYMBOLS
+        // This ensures the list is NEVER empty on Render, even if Binance blocks the IP.
+        const fallbackData: MarketCoin[] = SYMBOLS.map(symbol => ({
+          symbol,
+          baseAsset: symbol.replace('USDT', ''),
+          price: 0,
+          change24h: 0,
+          volume24h: 0,
+          market: 'SPOT',
+          exchange: 'Binance',
+          logo: `/api/logos/${symbol.replace('USDT', '').toUpperCase()}`
+        }));
+        setData(fallbackData);
+        console.warn("[Screener] API blocked or empty. Using static fallback list.");
+      }
+      
+      if (allRawData.length > 0 || data.length === 0) {
         // Sync ref with latest prop if needed
         if (!currentPreviewRef.current && latestPreviewCoin) {
           currentPreviewRef.current = latestPreviewCoin;
         }
 
         if (!currentPreviewRef.current && latestSettingsLoaded) {
-            const filtered = allRawData.filter(c => {
-              // Handle both "Binance" and "Binance Spot" style keys from Dashboard
-              const exKey = c.exchange;
-              const combinedKey = `${c.exchange} ${c.market.charAt(0) + c.market.slice(1).toLowerCase()}`;
-              const exActive = latestExchanges[exKey] || latestExchanges[combinedKey] || Object.values(latestExchanges).length === 0;
-              const typeActive = latestTypes[c.market] || Object.values(latestTypes).length === 0;
-              return exActive && typeActive;
-            });
-            const defaultCoin = filtered[0] || allRawData[0] || null;
-            setPreviewCoin(defaultCoin);
-            currentPreviewRef.current = defaultCoin;
-        } else if (currentPreviewRef.current) {
+            const currentData = allRawData.length > 0 ? allRawData : (data.length > 0 ? data : []);
+            if (currentData.length > 0) {
+              const filtered = currentData.filter(c => {
+                const exKey = c.exchange;
+                const combinedKey = `${c.exchange} ${c.market.charAt(0) + c.market.slice(1).toLowerCase()}`;
+                const exActive = latestExchanges[exKey] || latestExchanges[combinedKey] || Object.values(latestExchanges).length === 0;
+                const typeActive = latestTypes[c.market] || Object.values(latestTypes).length === 0;
+                return exActive && typeActive;
+              });
+              const defaultCoin = filtered[0] || currentData[0] || null;
+              setPreviewCoin(defaultCoin);
+              currentPreviewRef.current = defaultCoin;
+            }
+        } else if (currentPreviewRef.current && allRawData.length > 0) {
           const updated = allRawData.find(c => 
             c.symbol === currentPreviewRef.current?.symbol && 
             c.market === currentPreviewRef.current?.market && 
