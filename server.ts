@@ -333,6 +333,7 @@ async function startServer() {
       'https://api2.binance.com',
       'https://api3.binance.com',
       'https://api4.binance.com',
+      'https://api-gcp.binance.com',
       'https://api.binance.me'
     ];
 
@@ -342,13 +343,16 @@ async function startServer() {
       'https://fapi2.binance.com',
       'https://fapi3.binance.com',
       'https://fapi4.binance.com',
-      'https://fapi5.binance.com'
+      'https://fapi5.binance.com',
+      'https://fapi-gcp.binance.com'
     ];
 
     const bybitHosts = [
-      'https://api.bytick.com', // Tends to be more lenient with cloud IPs
+      'https://api.bytick.com', 
       'https://api.bybit.com',
+      'https://api.bybitpro.com', 
       'https://api.bybit.nl',
+      'https://api.bybit.me',
       'https://api.bybit-global.com',
       'https://api.bybit.net'
     ];
@@ -365,7 +369,7 @@ async function startServer() {
         try {
           const startTime = Date.now();
           const response = await axios.get(`${host}${path}`, { 
-            timeout: 7000, 
+            timeout: 8000, 
             headers,
             validateStatus: (status) => status === 200 || status === 201
           });
@@ -377,8 +381,10 @@ async function startServer() {
           const status = e.response?.status;
           console.warn(`[Ticker Proxy] ${name} FAILED at ${host} (Status: ${status || 'TIMEOUT'}). Region: ${serverRegion}`);
           if (status === 451 || status === 403) {
+            // Region block, skip to next mirror
             continue;
           }
+          // Other error or timeout, skip to next mirror
           continue; 
         }
       }
