@@ -323,37 +323,59 @@ async function startServer() {
 
   // Global Ticker Cache to avoid timeouts and bypass regional rate limits/blocks
   let globalTickerCache: any[] = [null, null, null, null];
+  const serverRegion = process.env.RENDER_REGION || 'local';
   
   const refreshTickerCache = async () => {
-    const binanceHosts = [
+    // Extensive mirror list for Binance
+    const binanceSpotHosts = [
       'https://api.binance.com',
       'https://api1.binance.com',
       'https://api2.binance.com',
       'https://api3.binance.com',
-      'https://api.binance.us' // US fallback
+      'https://api4.binance.com',
+      'https://api.binance.me'
+    ];
+
+    const binanceFutHosts = [
+      'https://fapi.binance.com',
+      'https://fapi1.binance.com',
+      'https://fapi2.binance.com',
+      'https://fapi3.binance.com',
+      'https://fapi4.binance.com',
+      'https://fapi5.binance.com'
+    ];
+
+    const bybitHosts = [
+      'https://api.bytick.com', // Tends to be more lenient with cloud IPs
+      'https://api.bybit.com',
+      'https://api.bybit.nl',
+      'https://api.bybit-global.com',
+      'https://api.bybit.net'
     ];
     
     const fetchWithRetry = async (hosts: string[], path: string, name: string) => {
       const headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'application/json'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache'
       };
       
       for (const host of hosts) {
         try {
           const response = await axios.get(`${host}${path}`, { 
-            timeout: 4000, 
+            timeout: 5000, 
             headers,
             validateStatus: (status) => status === 200
           });
           if (response.data) {
-            console.log(`[Ticker Proxy] Success: ${name} from ${host}`);
             return response.data;
           }
         } catch (e: any) {
           const status = e.response?.status;
-          console.warn(`[Ticker Proxy] ${name} failed at ${host} (${status || e.message})`);
-          if (status === 451) continue; // Regional block, try next
+          if (status === 451 || status === 403) {
+            console.warn(`[Ticker Proxy] ${name} BLOCKED at ${host} (Status: ${status}). Server Region: ${serverRegion}`);
+          }
+          continue; 
         }
       }
       return null;
@@ -361,15 +383,19 @@ async function startServer() {
 
     try {
       const results = await Promise.all([
-        fetchWithRetry(binanceHosts, '/api/v3/ticker/24hr', 'B-Spot'),
-        fetchWithRetry(['https://fapi.binance.com', 'https://fapi1.binance.com', 'https://fapi.binance.us'], '/fapi/v1/ticker/24hr', 'B-Fut'),
-        fetchWithRetry(['https://api.bybit.com', 'https://api.bytick.com', 'https://api.bybit.nl'], '/v5/market/tickers?category=spot', 'Y-Spot'),
-        fetchWithRetry(['https://api.bybit.com', 'https://api.bytick.com', 'https://api.bybit.nl'], '/v5/market/tickers?category=linear', 'Y-Fut'),
+        fetchWithRetry(binanceSpotHosts, '/api/v3/ticker/24hr', 'B-Spot'),
+        fetchWithRetry(binanceFutHosts, '/fapi/v1/ticker/24hr', 'B-Fut'),
+        fetchWithRetry(bybitHosts, '/v5/market/tickers?category=spot', 'Y-Spot'),
+        fetchWithRetry(bybitHosts, '/v5/market/tickers?category=linear', 'Y-Fut'),
       ]);
 
       // Optimization: merge with previous cache if some entries are null to avoid flickering
       globalTickerCache = results.map((res, i) => res || globalTickerCache[i]);
-      console.log(`[Ticker Proxy] Cache Updated. Stats: ${results.map((r, i) => r ? 'OK' : 'FAIL').join(', ')}`);
+      
+      const stats = results.map((r, i) => r ? 'OK' : 'FAIL').join(', ');
+      if (stats.includes('FAIL')) {
+        console.log(`[Ticker Proxy] Region: ${serverRegion} | Results: ${stats}`);
+      }
     } catch (e) {
       console.error("[Ticker Proxy] Background fetch fatal error:", e);
     }
