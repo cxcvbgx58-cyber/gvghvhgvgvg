@@ -17,7 +17,6 @@ CREATE TABLE IF NOT EXISTS users (
     balance DECIMAL(20, 2) DEFAULT 1000.00,
     role TEXT DEFAULT 'user',
     referrer_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    support_message TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 

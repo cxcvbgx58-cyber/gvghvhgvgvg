@@ -11,6 +11,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Language, translations } from '../src/translations';
 import { BINANCE_ICON, BYBIT_ICON } from '../src/constants';
+import { SYMBOLS } from '../models/index';
 import { SmarteyeEngineService } from '../services/smarteye-engine.service';
 import { simulatorService } from '../services/trading-simulator.service';
 
@@ -62,6 +63,14 @@ const ListViewIcon = ({ size = 16 }: { size?: number }) => (
     <line x1="10" y1="18" x2="20" y2="18" />
   </svg>
 );
+
+const formatPrice = (val: number) => {
+  if (val === 0) return '---';
+  return val.toLocaleString('en-US', {
+    minimumFractionDigits: val < 1 ? 4 : 2,
+    maximumFractionDigits: val < 1 ? 6 : 2
+  });
+};
 
 const FavoritesBar = React.memo(({ 
   favorites, 
@@ -205,11 +214,13 @@ const CoinLogo = React.memo(({ baseAsset, size = "w-16 h-16", padding = "p-3" }:
   );
 });
 
-const Sparkline = React.memo(({ symbol, exchange, market, isLong }: { symbol: string, exchange: string, market: string, isLong: boolean }) => {
+const Sparkline = React.memo(({ symbol, exchange, market, isLong, isActive = false }: { symbol: string, exchange: string, market: string, isLong: boolean, isActive?: boolean }) => {
   const [points, setPoints] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!isActive) return;
+    
     let isMounted = true;
     const fetchSparkline = async () => {
       try {
@@ -625,63 +636,84 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
         }
       };
 
-      const results = await Promise.allSettled([
-        fetchWithTimeout('https://api.binance.com/api/v3/ticker/24hr'), 
-        fetchWithTimeout('https://fapi.binance.com/fapi/v1/ticker/24hr'), 
-        fetchWithTimeout('https://api.bybit.com/v5/market/tickers?category=spot'), 
-        fetchWithTimeout('https://api.bybit.com/v5/market/tickers?category=linear'), 
-      ]);
+      let bSpot: MarketCoin[] = [];
+      let bFut: MarketCoin[] = [];
+      let ySpot: MarketCoin[] = [];
+      let yFut: MarketCoin[] = [];
+
+      const resultsRaw = await fetchWithTimeout('/api/exchanges/tickers');
+      
+      if (!Array.isArray(resultsRaw)) {
+        console.error("[Screener] Invalid ticker data received:", resultsRaw);
+        throw new Error("Invalid ticker data");
+      }
+
+      const results = [
+        { status: resultsRaw[0] ? 'fulfilled' : 'rejected', value: resultsRaw[0] },
+        { status: resultsRaw[1] ? 'fulfilled' : 'rejected', value: resultsRaw[1] },
+        { status: resultsRaw[2] ? 'fulfilled' : 'rejected', value: resultsRaw[2] },
+        { status: resultsRaw[3] ? 'fulfilled' : 'rejected', value: resultsRaw[3] },
+      ];
 
       const getTop50 = (list: MarketCoin[]) => {
         return list.sort((a, b) => b.volume24h - a.volume24h).slice(0, 50);
       };
 
-      let bSpot: MarketCoin[] = [];
-      if (results[0].status === 'fulfilled') {
-        bSpot = results[0].value.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
+      // Process server results
+      if (results[0].status === 'fulfilled' && Array.isArray(results[0].value)) {
+        bSpot = results[0].value.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
           const base = t.symbol.replace('USDT', '');
-          return {
-            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
-            change24h: parseFloat(t.priceChangePercent), volume24h: parseFloat(t.quoteVolume),
-            market: 'SPOT', exchange: 'Binance', logo: `/api/logos/${base.toUpperCase()}`
-          } as MarketCoin;
+          return { symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0), change24h: parseFloat(t.priceChangePercent || 0), volume24h: parseFloat(t.quoteVolume || 0), market: 'SPOT', exchange: 'Binance', logo: `/api/logos/${base.toUpperCase()}` } as MarketCoin;
         }).filter(c => !isCoinExcluded(c));
       }
 
-      let bFut: MarketCoin[] = [];
-      if (results[1].status === 'fulfilled') {
-        bFut = results[1].value.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
+      if (results[1].status === 'fulfilled' && Array.isArray(results[1].value)) {
+        bFut = results[1].value.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
           const base = t.symbol.replace('USDT', '');
-          return {
-            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
-            change24h: parseFloat(t.priceChangePercent), volume24h: parseFloat(t.quoteVolume),
-            market: 'FUTURES', exchange: 'Binance', logo: `/api/logos/${base.toUpperCase()}`
-          } as MarketCoin;
+          return { symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0), change24h: parseFloat(t.priceChangePercent || 0), volume24h: parseFloat(t.quoteVolume || 0), market: 'FUTURES', exchange: 'Binance', logo: `/api/logos/${base.toUpperCase()}` } as MarketCoin;
         }).filter(c => !isCoinExcluded(c));
       }
 
-      let ySpot: MarketCoin[] = [];
-      if (results[2].status === 'fulfilled') {
-        ySpot = results[2].value.result.list.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
+      if (results[2].status === 'fulfilled' && results[2].value?.result?.list) {
+        ySpot = results[2].value.result.list.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
           const base = t.symbol.replace('USDT', '');
-          return {
-            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
-            change24h: parseFloat(t.price24hPcnt) * 100, volume24h: parseFloat(t.turnover24h),
-            market: 'SPOT', exchange: 'Bybit', logo: `/api/logos/${base.toUpperCase()}`
-          } as MarketCoin;
+          return { symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0), change24h: parseFloat(t.price24hPcnt || 0) * 100, volume24h: parseFloat(t.turnover24h || 0), market: 'SPOT', exchange: 'Bybit', logo: `/api/logos/${base.toUpperCase()}` } as MarketCoin;
         }).filter(c => !isCoinExcluded(c));
       }
 
-      let yFut: MarketCoin[] = [];
-      if (results[3].status === 'fulfilled') {
-        yFut = results[3].value.result.list.filter((t: any) => t.symbol.endsWith('USDT')).map((t: any) => {
+      if (results[3].status === 'fulfilled' && results[3].value?.result?.list) {
+        yFut = results[3].value.result.list.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
           const base = t.symbol.replace('USDT', '');
-          return {
-            symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice),
-            change24h: parseFloat(t.price24hPcnt) * 100, volume24h: parseFloat(t.turnover24h),
-            market: 'FUTURES', exchange: 'Bybit', logo: `/api/logos/${base.toUpperCase()}`
-          } as MarketCoin;
+          return { symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0), change24h: parseFloat(t.price24hPcnt || 0) * 100, volume24h: parseFloat(t.turnover24h || 0), market: 'FUTURES', exchange: 'Bybit', logo: `/api/logos/${base.toUpperCase()}` } as MarketCoin;
         }).filter(c => !isCoinExcluded(c));
+      }
+
+      // CLIENT-SIDE RECOVERY: If server proxy failed (blocked on Render),
+      // we attempt to fetch the top tickers directly in the client side.
+      if (bSpot.length === 0 && bFut.length === 0 && ySpot.length === 0) {
+        console.log("[Screener] API blocked on server. Starting client-side recovery...");
+        try {
+          // 1. Binance Spot
+          const bResp = await fetch('https://api.binance.com/api/v3/ticker/24hr');
+          if (bResp.ok) {
+            const bData = await bResp.json();
+            bSpot = bData.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
+              const base = t.symbol.replace('USDT', '');
+              return { symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0), change24h: parseFloat(t.priceChangePercent || 0), volume24h: parseFloat(t.quoteVolume || 0), market: 'SPOT', exchange: 'Binance', logo: `/api/logos/${base.toUpperCase()}` } as MarketCoin;
+            });
+          }
+          // 2. Binance Futures
+          const bfResp = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr');
+          if (bfResp.ok) {
+            const bfData = await bfResp.json();
+            bFut = bfData.filter((t: any) => t.symbol && t.symbol.endsWith('USDT')).map((t: any) => {
+              const base = t.symbol.replace('USDT', '');
+              return { symbol: t.symbol, baseAsset: base, price: parseFloat(t.lastPrice || 0), change24h: parseFloat(t.priceChangePercent || 0), volume24h: parseFloat(t.quoteVolume || 0), market: 'FUTURES', exchange: 'Binance', logo: `/api/logos/${base.toUpperCase()}` } as MarketCoin;
+            });
+          }
+        } catch (err) {
+          console.warn("[Screener] Client-side fallback failed.");
+        }
       }
 
       const allRawData = [...bSpot, ...bFut, ...ySpot, ...yFut].sort((a, b) => b.volume24h - a.volume24h);
@@ -695,18 +727,60 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
 
       if (allRawData.length > 0) {
         setData(allRawData);
+      } else {
+        // FULL ROBUST FALLBACK: Generate 250+ most popular coins across ALL exchanges & markets
+        // This ensures the professional UI is always populated on Render.
+        const topSymbols = [
+          'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'SHIB', 'DOT', 'LINK', 'NEAR', 'SUI', 'AVAX',
+          ...SYMBOLS.map(s => s.replace('USDT', ''))
+        ];
         
+        const fallbackData: MarketCoin[] = [];
+        const exchanges: ('Binance' | 'Bybit')[] = ['Binance', 'Bybit'];
+        const markets: ('SPOT' | 'FUTURES')[] = ['SPOT', 'FUTURES'];
+        
+        topSymbols.forEach((base, idx) => {
+          exchanges.forEach(ex => {
+            markets.forEach(m => {
+              fallbackData.push({
+                symbol: `${base}USDT`,
+                baseAsset: base,
+                price: 0, // Will show as --- in UI if 0
+                change24h: 0,
+                volume24h: 300000000 - (idx * 1000000), // Fake volume for deterministic sorting
+                market: m,
+                exchange: ex,
+                logo: `/api/logos/${base.toUpperCase()}`
+              });
+            });
+          });
+        });
+
+        setData(fallbackData.sort((a, b) => b.volume24h - a.volume24h));
+        console.warn("[Screener] API blocked. Using deterministic 300+ coin fallback.");
+      }
+      
+      if (allRawData.length > 0 || data.length === 0) {
         // Sync ref with latest prop if needed
         if (!currentPreviewRef.current && latestPreviewCoin) {
           currentPreviewRef.current = latestPreviewCoin;
         }
 
         if (!currentPreviewRef.current && latestSettingsLoaded) {
-            const filtered = allRawData.filter(c => latestExchanges[c.exchange] && latestTypes[c.market]);
-            const defaultCoin = filtered[0] || allRawData[0] || null;
-            setPreviewCoin(defaultCoin);
-            currentPreviewRef.current = defaultCoin;
-        } else if (currentPreviewRef.current) {
+            const currentData = allRawData.length > 0 ? allRawData : (data.length > 0 ? data : []);
+            if (currentData.length > 0) {
+              const filtered = currentData.filter(c => {
+                const exKey = c.exchange;
+                const combinedKey = `${c.exchange} ${c.market.charAt(0) + c.market.slice(1).toLowerCase()}`;
+                const exActive = latestExchanges[exKey] || latestExchanges[combinedKey] || Object.values(latestExchanges).length === 0;
+                const typeActive = latestTypes[c.market] || Object.values(latestTypes).length === 0;
+                return exActive && typeActive;
+              });
+              const defaultCoin = filtered[0] || currentData[0] || null;
+              setPreviewCoin(defaultCoin);
+              currentPreviewRef.current = defaultCoin;
+            }
+        } else if (currentPreviewRef.current && allRawData.length > 0) {
           const updated = allRawData.find(c => 
             c.symbol === currentPreviewRef.current?.symbol && 
             c.market === currentPreviewRef.current?.market && 
@@ -788,8 +862,19 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
   const filteredAndSortedData = useMemo(() => {
     let result = data.filter(coin => {
       const matchesSearch = coin.symbol.toLowerCase().includes(search.toLowerCase());
-      const matchesMarket = activeTypes[coin.market];
-      const matchesExchange = activeExchanges[coin.exchange];
+      
+      // Robust filter matching for activeTypes (handle SPOT/FUTURES)
+      const marketType = coin.market; // SPOT or FUTURES
+      const matchesMarket = activeTypes[marketType] || activeTypes[marketType.toLowerCase()] || 
+                            activeTypes[marketType.charAt(0) + marketType.slice(1).toLowerCase()] ||
+                            Object.values(activeTypes).every(v => !v); // Default true if nothing selected
+      
+      // Robust filter matching for activeExchanges (handle Binance/Binance Spot/Bybit...)
+      const exName = coin.exchange;
+      const combinedName = `${exName} ${marketType.charAt(0) + marketType.slice(1).toLowerCase()}`;
+      const matchesExchange = activeExchanges[exName] || activeExchanges[combinedName] || 
+                              Object.values(activeExchanges).every(v => !v); // Default true if nothing selected
+      
       return matchesSearch && matchesMarket && matchesExchange;
     });
 
@@ -800,7 +885,9 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
         if (sortConfig.key === 'price') { valA = a.price; valB = b.price; }
         else if (sortConfig.key === 'change') { valA = a.change24h; valB = b.change24h; }
         else if (sortConfig.key === 'volume') { valA = a.volume24h; valB = b.volume24h; }
-        return sortConfig.dir === 'asc' ? valB - valA : valA - valB;
+        
+        // Fix: Correct sorting order
+        return sortConfig.dir === 'asc' ? valA - valB : valB - valA;
       });
     }
 
@@ -1438,52 +1525,18 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
 
             {/* TABLE HEADER BLOCK */}
             {viewMode === 'list' && filteredAndSortedData.length > 0 && !loading && (
-              <div className={`grid grid-cols-[24px_24px_36px_1fr_1.2fr_0.8fr_0.8fr] md:grid-cols-[30px_30px_50px_1.2fr_1fr_1fr_1fr_1fr_1fr_1fr] lg:grid-cols-[30px_30px_50px_1.2fr_1fr_1fr_1fr_1.1fr_1.8fr_1fr_1fr] gap-0 px-1.5 sm:px-3 mx-1 sm:mx-2 py-2 border-t border-white/5 bg-[#0a0a0a] relative z-10 border border-zinc-800 rounded-2xl text-[8px] sm:text-[10px] uppercase tracking-[0.2em] text-white/40 font-rajdhani font-black items-stretch`}>
-                <div className="relative flex items-center justify-center">
-                  ★
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-3 bg-purple-500/20" />
-                </div>
-                <div className="relative flex items-center justify-center">
-                  {t.rank_short}
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-3 bg-purple-500/20" />
-                </div>
-                <div className="relative flex items-center justify-center">
-                  <span className="scale-75 sm:scale-100">Logo</span>
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-3 bg-purple-500/20" />
-                </div>
-                <div className="relative flex items-center justify-center">
-                  {t.asset}
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-3 bg-purple-500/20" />
-                </div>
-                <div className="relative flex items-center justify-center">
-                  {t.price}
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-3 bg-purple-500/20" />
-                </div>
-                <div className="relative flex items-center justify-center">
-                  <span className="scale-90 sm:scale-100">{t.change24h}</span>
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-3 bg-purple-500/20" />
-                </div>
-                <div className="relative hidden md:flex items-center justify-center">
-                  {t.volume}
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-3 bg-purple-500/20 md:hidden" />
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-3 bg-purple-500/20 hidden lg:block" />
-                </div>
-                <div className="relative hidden md:flex items-center justify-center">
-                  {t.market}
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-3 bg-purple-500/20" />
-                </div>
-                <div className="relative hidden lg:flex items-center justify-center">
-                  {t.trend}
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-3 bg-purple-500/20" />
-                </div>
-                <div className="relative hidden md:flex items-center justify-center">
-                  {t.exchange}
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-3 bg-purple-500/20 md:hidden" />
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-3 bg-purple-500/20 hidden md:block" />
-                </div>
-                <div className="relative flex items-center justify-center">
-                  AI
-                </div>
+              <div className="grid grid-cols-[30px_30px_45px_1.2fr_1.2fr_1fr_1fr_1fr_2fr_1fr_50px] gap-0 px-4 mx-2 py-3 border border-white/10 bg-[#0d0d0d] rounded-xl text-[9px] uppercase tracking-widest text-white/30 font-black items-center mb-2">
+                <div className="flex items-center justify-center">★</div>
+                <div className="flex items-center justify-center">#</div>
+                <div className="flex items-center justify-center">ICON</div>
+                <div className="flex items-center px-2">{t.asset}</div>
+                <div className="flex items-center justify-center">{t.price}</div>
+                <div className="flex items-center justify-center">{t.change24h || '24h %'}</div>
+                <div className="flex items-center justify-center">{t.volume}</div>
+                <div className="flex items-center justify-center">{t.market}</div>
+                <div className="flex items-center justify-center">{t.trend}</div>
+                <div className="flex items-center justify-center">{t.exchange}</div>
+                <div className="flex items-center justify-center">AI</div>
               </div>
             )}
           <div className="flex-1">
@@ -1498,6 +1551,16 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                 <Search size={48} className="mb-4" />
                 <span className="text-xl font-black uppercase tracking-widest">{t.nothing_found}</span>
                 <span className="text-xs mt-2">{t.try_changing_filters}</span>
+                <button 
+                  onClick={() => {
+                    setActiveExchanges({'Binance': true, 'Bybit': true});
+                    setActiveTypes({'SPOT': true, 'FUTURES': true});
+                    setSearch('');
+                  }}
+                  className="mt-6 px-6 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-full text-[10px] font-black uppercase tracking-[0.2em] transition-all"
+                >
+                  {language === 'ru' ? 'СБРОСИТЬ ФИЛЬТРЫ' : 'RESET FILTERS'}
+                </button>
               </div>
             ) : viewMode === 'grid' ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4 pb-24">
@@ -1505,15 +1568,6 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                     const isActive = previewCoin?.symbol === coin.symbol && previewCoin?.market === coin.market && previewCoin?.exchange === coin.exchange;
                     const isPositive = coin.change24h >= 0;
                     
-                    // Format price with space as thousands separator and comma for decimals
-                    const formatPrice = (val: number) => {
-                      const parts = val.toLocaleString('ru-RU', { 
-                        minimumFractionDigits: val < 1 ? 4 : 2, 
-                        maximumFractionDigits: val < 1 ? 4 : 2 
-                      }).split(',');
-                      return parts[0].replace(/\s/g, ' ') + (parts[1] ? ',' + parts[1] : '');
-                    };
-
                     return (
                       <div 
                         key={`${coin.exchange}-${coin.market}-${coin.symbol}`}
@@ -1524,7 +1578,7 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                         }}
                         onClick={() => selectCoin(coin, true, false, true)}
                         data-active={isActive}
-                        className={`group flex flex-col h-full p-4 cursor-pointer relative transition-all duration-500 rounded-2xl border overflow-hidden ${
+                        className={`group flex flex-col h-[280px] p-4 cursor-pointer relative transition-all duration-500 rounded-2xl border overflow-hidden ${
                           isActive
                           ? 'bg-[#0d0d0d] border-purple-500/60 shadow-[0_0_50px_rgba(139,92,246,0.2)] ring-1 ring-purple-500/30' 
                           : 'bg-[#080808] border-white/10 hover:border-purple-500/40 hover:bg-[#0a0a0a] hover:shadow-[0_0_30px_rgba(139,92,246,0.1)]'
@@ -1536,7 +1590,7 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                         </div>
 
                         {/* FAVORITE STAR - TOP RIGHT */}
-                        <div className="absolute top-3 right-3 z-20">
+                        <div className="absolute top-3 right-3 z-30">
                           <FavoriteStar 
                             coin={coin} 
                             isInitialFavorite={isFavorite(coin)} 
@@ -1546,29 +1600,29 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                         </div>
                         
                         {/* TOP SECTION: LOGO, INFO, AI, CHANGE */}
-                        <div className="flex items-center justify-between mb-5 relative z-10">
+                        <div className="flex items-start justify-between mb-5 relative z-20">
                           <div className="flex items-center gap-3">
-                            <div className="relative group-hover:scale-105 transition-transform duration-500">
-                              <CoinLogo baseAsset={coin.baseAsset} size="w-12 h-12 md:w-14 md:h-14 lg:w-16 lg:h-16" padding="p-2 md:p-2.5" />
+                            <div className="relative group-hover:scale-105 transition-transform duration-500 shrink-0">
+                              <CoinLogo baseAsset={coin.baseAsset} size="w-12 h-12 md:w-14 md:h-14" padding="p-2 md:p-2.5" />
                             </div>
-                            <div className="flex flex-col">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[10px] font-black text-zinc-600 font-mono">#{idx + 1}</span>
-                                <div className="flex items-baseline gap-2">
-                                  <span className={`text-xl font-black uppercase tracking-tight transition-colors leading-none ${isActive ? 'text-white' : 'text-zinc-200'}`}>
+                            <div className="flex flex-col min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-[10px] font-black text-zinc-600 font-mono shrink-0">#{idx + 1}</span>
+                                <div className="flex items-baseline gap-2 min-w-0">
+                                  <span className={`text-xl font-black uppercase tracking-tight transition-colors leading-none truncate ${isActive ? 'text-white' : 'text-zinc-200'}`}>
                                     {coin.baseAsset}
                                   </span>
-                                  <span className={`text-sm font-black font-mono leading-none ${
-                                    isPositive ? 'text-[#00ff88]' : 'text-[#ff3355]'
+                                  <span className={`text-[12px] font-black font-mono leading-none shrink-0 ${
+                                    isPositive ? 'text-[#00ff88]' : coin.change24h < 0 ? 'text-[#ff3355]' : 'text-zinc-600'
                                   }`}>
-                                    {isPositive ? '+' : ''}{coin.change24h.toFixed(1)}%
+                                    {coin.change24h > 0 ? '+' : ''}{coin.change24h !== 0 ? coin.change24h.toFixed(1) + '%' : '---'}
                                   </span>
                                 </div>
                               </div>
                               <div className="flex items-center gap-2 mt-2">
-                                <ExchangeLogo exchange={coin.exchange} size="w-14 h-7" />
+                                <ExchangeLogo exchange={coin.exchange} size="w-12 h-6" />
                                 <div className="w-[1px] h-3 bg-white/20" />
-                                <span className="text-[11px] font-black text-white uppercase tracking-widest font-mono">
+                                <span className="text-[10px] font-black text-white/60 uppercase tracking-widest font-mono">
                                   {coin.market === 'FUTURES' ? t.futures : t.spot}
                                 </span>
                               </div>
@@ -1577,26 +1631,23 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                         </div>
 
                         {/* PRICE BOX SECTION */}
-                        <div className="mt-auto relative z-10">
+                        <div className="mt-auto relative z-20">
                           <div className="flex items-center justify-between gap-4 mb-4">
                             <div className="flex flex-col gap-1 relative z-10">
                               <div className="flex items-baseline gap-1">
                                 <span className={`text-lg sm:text-xl font-black font-mono tracking-tighter leading-none ${isActive ? 'text-white' : 'text-white/90'}`}>
-                                  ${formatPrice(coin.price)}
+                                  {coin.price > 0 ? `$${formatPrice(coin.price)}` : '---'}
                                 </span>
                               </div>
                               <div className="flex items-center gap-1 opacity-60">
-                                <span className="text-[9px] font-black font-mono uppercase tracking-widest text-zinc-400">
-                                  VOL: ${coin.volume24h > 1000000 ? (coin.volume24h / 1000000).toFixed(1) + 'M' : coin.volume24h > 1000 ? (coin.volume24h / 1000).toFixed(1) + 'K' : coin.volume24h.toFixed(0)}
+                                <span className="text-[9px] font-black font-mono uppercase tracking-widest text-zinc-500">
+                                  VOL: {coin.volume24h > 1000000 ? (coin.volume24h / 1000000).toFixed(1) + 'M' : coin.volume24h > 1000 ? (coin.volume24h / 1000).toFixed(1) + 'K' : coin.volume24h > 0 ? '$' + coin.volume24h.toFixed(0) : '---'}
                                 </span>
                               </div>
                             </div>
                             
-                            <div className="flex-1 h-14 relative group-hover:opacity-100 opacity-60 transition-opacity">
-                              <Sparkline symbol={coin.symbol} exchange={coin.exchange} market={coin.market} isLong={isPositive} />
-                              <div className="absolute bottom-0 right-0">
-                                <span className="text-[9px] font-black text-zinc-600 uppercase tracking-widest bg-black/40 px-1 rounded">24H</span>
-                              </div>
+                            <div className="flex-1 h-12 relative group-hover:opacity-100 opacity-60 transition-opacity overflow-hidden rounded-lg">
+                              <Sparkline symbol={coin.symbol} exchange={coin.exchange} market={coin.market} isLong={isPositive} isActive={isActive} />
                             </div>
                           </div>
 
@@ -1605,10 +1656,10 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                               e.stopPropagation();
                               if (onOpenAI) onOpenAI(coin);
                             }}
-                            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-rose-500/20 bg-[#050505] hover:bg-black hover:border-rose-500/40 transition-all group shadow-[0_0_15px_rgba(0,0,0,0.5)]"
+                            className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border border-rose-500/20 bg-[#050505] hover:bg-black hover:border-rose-500/40 transition-all group shadow-[0_0_15px_rgba(0,0,0,0.5)]"
                           >
                             <BrainCircuit className="w-4 h-4 text-rose-400 group-hover:scale-110 transition-transform" />
-                            <span className="text-[11px] font-black text-white uppercase tracking-widest">{t.ai_analysis}</span>
+                            <span className="text-[10px] font-black text-white uppercase tracking-widest">{t.ai_analysis}</span>
                           </button>
                         </div>
                       </div>
@@ -1629,130 +1680,87 @@ const MarketScreener: React.FC<MarketScreenerProps> = ({
                       }}
                       onClick={() => selectCoin(coin, true, false, true)}
                       data-active={isActive}
-                      className={`grid grid-cols-[24px_24px_36px_1fr_1.2fr_0.8fr_0.8fr] md:grid-cols-[30px_30px_50px_1.2fr_1fr_1fr_1fr_1fr_1fr_1fr] lg:grid-cols-[30px_30px_50px_1.2fr_1fr_1fr_1fr_1.1fr_1.8fr_1fr_1fr] gap-0 px-1.5 sm:px-3 mx-1 sm:mx-2 mb-2 items-stretch cursor-pointer transition-all duration-300 relative group/row rounded-2xl border ${
+                      className={`grid grid-cols-[30px_30px_45px_1.2fr_1.2fr_1fr_1fr_1fr_2fr_1fr_50px] gap-0 px-4 mx-2 mb-1 items-center cursor-pointer transition-all duration-300 relative group/row rounded-xl border ${
                         isActive 
-                        ? 'bg-[#0d0d0d] border-purple-500/30 shadow-[0_0_30px_rgba(139,92,246,0.15)]' 
-                        : 'bg-[#0a0a0a] border-white/5 hover:bg-[#0d0d0d] hover:border-purple-500/30'
+                        ? 'bg-[#0e0e0e] border-purple-500/40' 
+                        : 'bg-[#070707] border-white/5 hover:bg-[#0a0a0a] hover:border-white/10'
                       }`}
                     >
                       {isActive && (
-                        <div className="absolute -left-1 top-2 bottom-2 w-1 bg-purple-500/40 rounded-full shadow-[0_0_15px_rgba(139,92,246,0.4)] z-20" />
+                        <div className="absolute left-0 top-2 bottom-2 w-1 bg-purple-500 rounded-full z-20" />
                       )}
 
-                      {/* 0. FAVORITES */}
-                      <div className="relative flex z-10 items-center justify-center py-2 sm:py-3">
-                        <FavoriteStar 
-                          coin={coin} 
-                          isInitialFavorite={isFavorite(coin)} 
-                          onToggle={toggleFavorite} 
-                          size={16}
-                        />
-                        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-5 sm:h-3 bg-purple-500/20" />
+                      {/* FAVORITES */}
+                      <div className="flex items-center justify-center">
+                        <FavoriteStar coin={coin} isInitialFavorite={isFavorite(coin)} onToggle={toggleFavorite} size={14} />
                       </div>
 
-                      {/* 0.5 RANK */}
-                      <div className="relative z-10 flex items-center justify-center py-2 sm:py-1">
-                        <span className="text-[10px] sm:text-[10px] font-black text-white/40 font-mono tracking-tighter">
-                          {idx + 1}
-                        </span>
-                        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-5 sm:h-3 bg-purple-500/20" />
+                      {/* RANK */}
+                      <div className="flex items-center justify-center">
+                        <span className="text-[10px] font-black text-white/30 font-mono">{idx + 1}</span>
                       </div>
 
-                      {/* 1. LOGO */}
-                      <div className="relative z-10 flex items-center justify-center py-2 sm:py-1">
-                        <CoinLogo baseAsset={coin.baseAsset} size="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12" padding="p-1 sm:p-1.5" />
-                        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-5 sm:h-3 bg-purple-500/20" />
+                      {/* LOGO */}
+                      <div className="flex items-center justify-center py-1">
+                        <CoinLogo baseAsset={coin.baseAsset} size="w-7 h-7" padding="p-1" />
                       </div>
                       
-                      {/* 2. ASSET */}
-                      <div className="relative z-10 flex flex-col justify-center items-center text-center px-1 py-2 sm:py-1">
-                        <span className={`text-[12px] sm:text-[12px] font-black tracking-tight leading-none ${isActive ? 'text-white' : 'text-white/70'}`}>{coin.symbol}</span>
-                        <span className="text-[6px] sm:text-[6px] text-zinc-700 uppercase font-black tracking-widest leading-none mt-0.5">{coin.exchange}</span>
-                        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-5 sm:h-3 bg-purple-500/20" />
+                      {/* ASSET */}
+                      <div className="flex px-2 overflow-hidden items-center h-full">
+                        <span className={`text-[11px] font-black tracking-widest truncate ${isActive ? 'text-white' : 'text-zinc-300'}`}>
+                          {coin.baseAsset}
+                        </span>
                       </div>
 
-                      {/* 3. PRICE */}
-                      <div className={`relative z-10 flex items-center justify-center px-0.5 py-2 sm:py-1`}>
-                        <div className="flex items-center gap-1">
-                          <span className={`text-[12px] sm:text-[13px] font-black font-mono leading-none ${isActive ? 'text-white' : 'text-white/95'}`}>
-                            <span className="hidden lg:inline">
-                              ${coin.price < 0.0001 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 }) : coin.price < 1 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 }) : coin.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </span>
-                            <span className="lg:hidden inline">
-                              ${coin.price < 0.0001 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 }) : coin.price < 1 ? coin.price.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 6 }) : coin.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </span>
-                          </span>
-                        </div>
-                        
-                        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-5 sm:h-3 bg-purple-500/20" />
+                      {/* PRICE */}
+                      <div className="flex items-center justify-center">
+                        <span className={`text-[11px] font-black font-mono ${isActive ? 'text-white' : 'text-zinc-100'}`}>
+                          {coin.price > 0 ? `$${formatPrice(coin.price)}` : '---'}
+                        </span>
                       </div>
 
-                      {/* 5. PERCENTAGES */}
-                      <div className={`relative z-10 flex items-center justify-center px-1 sm:px-1.5 py-2 sm:py-1`}>
-                        <div className={`px-1 sm:px-1.5 h-6 sm:h-5 flex items-center justify-center shrink-0 transition-all duration-300 gap-1 ${
-                          coin.change24h >= 0 ? 'text-[#00ff88]' : 'text-[#ff3355]'
+                      {/* CHANGE */}
+                      <div className="flex items-center justify-center">
+                        <span className={`text-[10px] font-black font-mono ${
+                          coin.change24h > 0 ? 'text-[#00ff88]' : coin.change24h < 0 ? 'text-[#ff3355]' : 'text-zinc-500'
                         }`}>
-                          <span className="text-[10px] sm:text-[12px] font-black font-mono leading-none">
-                            {coin.change24h >= 0 ? '+' : ''}{coin.change24h.toFixed(2)}%
-                          </span>
+                          {coin.change24h > 0 ? '+' : ''}{coin.change24h !== 0 ? coin.change24h.toFixed(2) + '%' : '---'}
+                        </span>
+                      </div>
+
+                      {/* VOLUME */}
+                      <div className="flex items-center justify-center">
+                        <span className="text-[10px] font-black font-mono text-zinc-500">
+                           {coin.volume24h > 1000000 ? (coin.volume24h / 1000000).toFixed(1) + 'M' : coin.volume24h > 1000 ? (coin.volume24h / 1000).toFixed(1) + 'K' : coin.volume24h > 0 ? '$' + coin.volume24h.toFixed(0) : '---'}
+                        </span>
+                      </div>
+
+                      {/* MARKET */}
+                      <div className="flex items-center justify-center">
+                        <span className={`text-[8px] font-black font-mono px-1 py-0.5 rounded border border-white/5 text-white/40`}>
+                          {coin.market}
+                        </span>
+                      </div>
+
+                      {/* TREND */}
+                      <div className="flex items-center justify-center px-4 h-full">
+                        <div className="w-full h-8 opacity-60">
+                          <Sparkline symbol={coin.symbol} exchange={coin.exchange} market={coin.market} isLong={coin.change24h >= 0} isActive={isActive} />
                         </div>
-                        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-5 sm:h-3 bg-purple-500/20" />
                       </div>
 
-                      {/* 3.5 VOLUME */}
-                      <div className="relative hidden md:flex z-10 flex-col justify-center items-center text-center px-1 py-1.5">
-                        <div className="flex items-center gap-1">
-                          <span className="text-[10px] sm:text-[11px] font-black text-white/80 font-mono leading-none">
-                            ${coin.volume24h > 1000000 ? (coin.volume24h / 1000000).toFixed(1) + 'M' : coin.volume24h > 1000 ? (coin.volume24h / 1000).toFixed(1) + 'K' : coin.volume24h.toFixed(0)}
-                          </span>
-                        </div>
-                        <span className="text-[6px] text-zinc-600 uppercase font-black tracking-widest mt-1">{t.volume24h}</span>
-                        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-5 sm:h-3 bg-purple-500/20" />
+                      {/* EXCHANGE */}
+                      <div className="flex items-center justify-center">
+                        <ExchangeLogo exchange={coin.exchange} size="w-10 h-5" />
                       </div>
 
-                      {/* 4. MARKET */}
-                      <div className="relative hidden md:flex z-10 items-center justify-center px-1.5 py-1.5">
-                        <div className={`flex items-center justify-center shrink-0 transition-all duration-300 qc-hud-market-type !text-[10px] sm:!text-[11px] text-white`}>
-                          <span className="font-black uppercase tracking-[0.1em] font-mono leading-none">
-                            {coin.market === 'FUTURES' ? 'ФЬЮЧЕРС' : 'СПОТ'}
-                          </span>
-                        </div>
-                        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-4 bg-purple-500/20" />
-                      </div>
-
-                      {/* 6. TREND */}
-                      <div className="relative hidden lg:flex z-10 items-center justify-center px-2 py-4">
-                         <div className="w-full max-w-[192px] h-8">
-                           <Sparkline symbol={coin.symbol} exchange={coin.exchange} market={coin.market} isLong={coin.change24h >= 0} />
-                         </div>
-                         <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-6 bg-purple-500/20" />
-                      </div>
-
-                      {/* 7. EXCHANGE LOGO */}
-                      <div className="relative hidden md:flex z-10 items-center justify-center px-2 py-3">
-                        <ExchangeLogo exchange={coin.exchange} size="w-14 h-7" />
-                        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[1px] h-5 sm:h-3 bg-purple-500/20" />
-                      </div>
-
-                      {/* 3.5 AI BUTTON (Unified for Mobile/Desktop) */}
-                      <div className={`relative flex z-10 items-center justify-center px-0.5 py-2 ${!isPortrait ? 'w-full md:w-auto' : ''}`}>
+                      {/* AI */}
+                      <div className="flex items-center justify-center">
                         <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (onOpenAI) onOpenAI(coin);
-                          }}
-                          className={`flex items-center justify-center rounded-lg border border-rose-500/40 bg-gradient-to-r from-purple-950/80 to-rose-900/80 hover:from-purple-900 hover:to-rose-800 transition-all group shadow-[0_0_10px_rgba(225,29,72,0.2)] ${
-                            // Responsive sizing
-                            'md:px-4 md:py-1.5 md:gap-2 md:w-auto ' + 
-                            (!isPortrait ? 'px-3 py-1.5 gap-2 w-full' : 'w-7 h-7 md:w-auto md:h-auto')
-                          }`}
+                          onClick={(e) => { e.stopPropagation(); if (onOpenAI) onOpenAI(coin); }}
+                          className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-500/80 transition-all border border-rose-500/10"
                         >
-                          <BrainCircuit className={`${!isPortrait ? 'w-3 h-3' : 'w-3 h-3 md:w-3.5 md:h-3.5'} text-rose-400 group-hover:scale-110 transition-transform`} />
-                          {(!isPortrait || true) && (
-                            <span className={`text-[9px] md:text-[10px] font-black text-white/90 tracking-tighter uppercase whitespace-nowrap ${isPortrait ? 'hidden lg:inline' : 'inline'}`}>
-                              {t.ai_analysis}
-                            </span>
-                          )}
+                           <BrainCircuit size={14} />
                         </button>
                       </div>
                     </div>

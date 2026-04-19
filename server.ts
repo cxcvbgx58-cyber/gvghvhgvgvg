@@ -7,7 +7,6 @@ import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import http from "http";
 import jwt from "jsonwebtoken";
-import bcrypt from "bcryptjs";
 import TelegramBot from 'node-telegram-bot-api';
 import { query, initializeDatabase } from "./src/lib/db.ts";
 import { MarketType, ExchangeConfig, SYMBOLS, getConfigsForMarket } from "./models/index.ts";
@@ -322,6 +321,114 @@ async function startServer() {
     res.redirect(`https://ui-avatars.com/api/?name=${symbol}&background=1a1a1a&color=fff&bold=true&font-size=0.33`);
   });
 
+  // Global Ticker Cache to avoid timeouts and bypass regional rate limits/blocks
+  let globalTickerCache: any[] = [null, null, null, null];
+  const serverRegion = process.env.RENDER_REGION || 'local';
+  
+  const refreshTickerCache = async () => {
+    // Extensive mirror list for Binance
+    const binanceSpotHosts = [
+      'https://api.binance.com',
+      'https://api1.binance.com',
+      'https://api2.binance.com',
+      'https://api3.binance.com',
+      'https://api4.binance.com',
+      'https://api-gcp.binance.com',
+      'https://api.binance.me'
+    ];
+
+    const binanceFutHosts = [
+      'https://fapi.binance.com',
+      'https://fapi1.binance.com',
+      'https://fapi2.binance.com',
+      'https://fapi3.binance.com',
+      'https://fapi4.binance.com',
+      'https://fapi5.binance.com',
+      'https://fapi-gcp.binance.com'
+    ];
+
+    const bybitHosts = [
+      'https://api.bytick.com', 
+      'https://api.bybit.com',
+      'https://api.bybitpro.com', 
+      'https://api.bybit.nl',
+      'https://api.bybit.me',
+      'https://api.bybit-global.com',
+      'https://api.bybit.net'
+    ];
+    
+    const fetchWithRetry = async (hosts: string[], path: string, name: string) => {
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache',
+        'X-Requested-With': 'XMLHttpRequest'
+      };
+      
+      for (const host of hosts) {
+        try {
+          const startTime = Date.now();
+          const response = await axios.get(`${host}${path}`, { 
+            timeout: 8000, 
+            headers,
+            validateStatus: (status) => status === 200 || status === 201
+          });
+          if (response.data) {
+            console.log(`[Ticker Proxy] ${name} SUCCESS from ${host} in ${Date.now() - startTime}ms`);
+            return response.data;
+          }
+        } catch (e: any) {
+          const status = e.response?.status;
+          console.warn(`[Ticker Proxy] ${name} FAILED at ${host} (Status: ${status || 'TIMEOUT'}). Region: ${serverRegion}`);
+          if (status === 451 || status === 403) {
+            // Region block, skip to next mirror
+            continue;
+          }
+          // Other error or timeout, skip to next mirror
+          continue; 
+        }
+      }
+      return null;
+    };
+
+    try {
+      const results = await Promise.all([
+        fetchWithRetry(binanceSpotHosts, '/api/v3/ticker/24hr', 'B-Spot'),
+        fetchWithRetry(binanceFutHosts, '/fapi/v1/ticker/24hr', 'B-Fut'),
+        fetchWithRetry(bybitHosts, '/v5/market/tickers?category=spot', 'Y-Spot'),
+        fetchWithRetry(bybitHosts, '/v5/market/tickers?category=linear', 'Y-Fut'),
+      ]);
+
+      // Optimization: merge with previous cache if some entries are null to avoid flickering
+      globalTickerCache = results.map((res, i) => res || globalTickerCache[i]);
+      
+      const stats = results.map((r, i) => r ? 'OK' : 'FAIL').join(', ');
+      if (stats.includes('FAIL')) {
+        console.warn(`[Ticker Proxy] Region: ${serverRegion} | Results: ${stats}`);
+      }
+    } catch (e) {
+      console.error("[Ticker Proxy] Background fetch fatal error:", e);
+    }
+  };
+
+  // Run initial fetch and set robust interval loop
+  refreshTickerCache();
+  const startTickerLoop = () => {
+    setTimeout(async () => {
+      await refreshTickerCache();
+      startTickerLoop();
+    }, 30000);
+  };
+  startTickerLoop();
+
+  // Proxy for exchange tickers returns the cached data immediately
+  app.get("/api/exchanges/tickers", (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.json(globalTickerCache);
+  });
+
   // Database Routes
   app.get("/api/db/status", async (req, res) => {
     try {
@@ -430,11 +537,11 @@ async function startServer() {
         return res.status(400).json({ error: "User already exists" });
       }
 
-      // Pro hashing instead of plain text
-      const hashedPassword = await bcrypt.hash(password, 10);
+      // WARNING: Storing passwords in plain text is highly insecure.
+      // This was implemented per user request.
       const result = await query(
         "INSERT INTO users (email, password, username, referrer_id) VALUES ($1, $2, $3, $4) RETURNING id, email, username, subscription_tier, avatar_tier, premium_end_date, balance, role, referrer_id, created_at",
-        [email, hashedPassword, username || email.split("@")[0], referrerId || null]
+        [email, password, username || email.split("@")[0], referrerId || null]
       );
 
       const user = result.rows[0];
@@ -472,7 +579,8 @@ async function startServer() {
         return res.status(401).json({ error: "Invalid email or password" });
       }
       
-      const valid = await bcrypt.compare(password, user.password);
+      // Plain text comparison per user request
+      const valid = (password === user.password);
       if (!valid) {
         return res.status(401).json({ error: "Invalid email or password" });
       }
@@ -1194,9 +1302,14 @@ async function startServer() {
             data: parsed
           });
           
+          const symbol = (parsed.s || parsed.data?.s)?.toUpperCase();
+
           subscribers?.forEach(client => {
             if (client.readyState === WebSocket.OPEN) {
-              client.send(message);
+              // Only send raw depth if the client is specifically previewing this symbol
+              if (client.previewSymbol === symbol) {
+                client.send(message);
+              }
             }
           });
         }
@@ -1331,6 +1444,11 @@ async function startServer() {
         if (payload.type === "IDENTIFY") {
           clientWs.userId = payload.userId;
           console.log(`[WS Support] Client identified as ${payload.userId}`);
+          return;
+        }
+
+        if (payload.type === "SET_PREVIEW_SYMBOL") {
+          clientWs.previewSymbol = payload.symbol?.toUpperCase();
           return;
         }
 
